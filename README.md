@@ -1,10 +1,10 @@
 # vps-proxy-setup
 
-Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements stage (draft v0.1 under review); nothing to install yet.**
+Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements stage (draft v0.2 under review); nothing to install yet.**
 
 在已经用 [vps-hardening](https://github.com/alieismy/vps-hardening) 加固的 Debian/Ubuntu VPS 上搭建代理服务，以 3X-UI 为例。
 
-**当前状态：需求阶段，[需求规格说明](docs/requirements.md) v0.1 草案待评审；还没有可用的脚本或发行版。**
+**当前状态：需求阶段，[需求规格说明](docs/requirements.md) v0.2 草案待评审；还没有可用的脚本或发行版。**
 
 ## 与另外两个仓库的关系
 
@@ -36,7 +36,7 @@ Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example.
 
 ## 下一步
 
-评审需求规格说明 v0.1 草案。它的第 11 节有四项待决，包括交付形态（建议文档加只读检查脚本，第 11.1 节）。之后是方案设计、验证计划、详细设计和实现。测试沿用 vps-hardening 的方式：CI 虚拟机，再加一台测试 VPS。
+评审需求规格说明 v0.2 草案。v0.1 第 11 节的四项待决中，OQ-2～OQ-4 已有答复（需求 D6～D8）：订阅主机名首版只做 DNS 解析，首版不设流量上限和到期时间，分流规则在 3X-UI 中统一配置。还有两项待决：交付形态（OQ-1，建议文档加只读检查脚本，第 11.1 节）和分流规则的内容（OQ-5）。之后是方案设计、验证计划、详细设计和实现。测试沿用 vps-hardening 的方式：CI 虚拟机，再加一台测试 VPS。
 
 ## 许可证
 
