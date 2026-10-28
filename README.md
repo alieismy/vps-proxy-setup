@@ -1,10 +1,10 @@
 # vps-proxy-setup
 
-Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements stage (draft v0.2 under review); nothing to install yet.**
+Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements stage (draft v0.3 under review); nothing to install yet.**
 
 在已经用 [vps-hardening](https://github.com/alieismy/vps-hardening) 加固的 Debian/Ubuntu VPS 上搭建代理服务，以 3X-UI 为例。
 
-**当前状态：需求阶段，[需求规格说明](docs/requirements.md) v0.2 草案待评审；还没有可用的脚本或发行版。**
+**当前状态：需求阶段，[需求规格说明](docs/requirements.md) v0.3 草案待评审；还没有可用的脚本或发行版。**
 
 ## 与另外两个仓库的关系
 
@@ -25,18 +25,25 @@ Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example.
 
 ## 已经约定的边界
 
-以下各条来自 vps-hardening 已批准的需求（[第 7.2 节](https://github.com/alieismy/vps-hardening/blob/master/docs/requirements.md#72-与-vps-proxy-setup-的约定3x-ui-v3102)、D14、D16、D32），本仓库的需求以它们为前提：
+以下各条来自 vps-hardening 已批准的需求（[第 7.2 节](https://github.com/alieismy/vps-hardening/blob/master/docs/requirements.md#72-与-vps-proxy-setup-的约定3x-ui-v3102)、D14、D16、D32），本仓库的需求以它们为前提；只有 3X-UI 的版本按本仓库需求 D10 改变：
 
-- 3X-UI 安装时带版本参数 `v3.10.2`，运行前按固定的摘要校验 `install.sh`。
+- 3X-UI 安装时带版本参数，运行前按固定的摘要校验 `install.sh`。vps-hardening 约定的是 `v3.10.2`；本仓库改用 `v3.11.0`，因为 v3.10.2 自带的 Xray 已被撤版。v3.11.0 的 `install.sh` 与 v3.10.2 的相同，摘要不变。
 - 安装时设 `XUI_ENABLE_FAIL2BAN=false`，不启用 IP Limit；Fail2ban 由 vps-hardening 管理。
 - 面板端口用加固时记录的值（默认 2053），通过 `XUI_PANEL_PORT` 传入。安装后执行 `x-ui setting -listenIP 127.0.0.1` 并重启 x-ui，使面板只监听回环地址，只经 SSH 隧道访问。
 - 公开端口（例如 443/tcp 和订阅端口 2096/tcp）由管理员用 `vps-hardening ports --add` 开放，并从新的 SSH 会话确认。本仓库不直接改 UFW 规则，不使用 3X-UI 的防火墙菜单和 BBR 菜单。
 - 80/tcp 不开放。证书用 Cloudflare API Token 走 DNS-01 签发；Token 会保存在 VPS 上，只授予签发证书所需的最小权限，例如只能编辑单个 Zone 的 DNS。
-- v3.10.2 自带的 Xray 只接受提供 X25519MLKEM768 密钥交换的 REALITY 客户端，客户端要先开启 ML-KEM，例如 Mihomo 设 `support-x25519mlkem768: true`。
+- Xray 从 v26.9.8 起只接受提供 X25519MLKEM768 密钥交换的 REALITY 客户端（v3.11.0 自带 v26.10.21），客户端要先开启 ML-KEM，例如 Mihomo 设 `support-x25519mlkem768: true`。
 
 ## 下一步
 
-评审需求规格说明 v0.2 草案。v0.1 第 11 节的四项待决中，OQ-2～OQ-4 已有答复（需求 D6～D8）：订阅主机名首版只做 DNS 解析，首版不设流量上限和到期时间，分流规则在 3X-UI 中统一配置。还有两项待决：交付形态（OQ-1，建议文档加只读检查脚本，第 11.1 节）和分流规则的内容（OQ-5）。之后是方案设计、验证计划、详细设计和实现。测试沿用 vps-hardening 的方式：CI 虚拟机，再加一台测试 VPS。
+评审需求规格说明 v0.3 草案。v0.2 的其余内容已无异议（需求 U6），待决事项都已决定：
+
+- 3X-UI 改用 v3.11.0（D10，第 11.3 节）；
+- 先调优、再安装 3X-UI，顺序不变（D11，第 11.4 节）；
+- 交付形态为首次部署脚本加只读检查：脚本只在全新安装的 3X-UI 上写入设置，之后的变更在面板中进行（D12，第 11.1 节）；
+- 分流规则以 Loyalsoldier/clash-rules 的白名单模式为基础，规则集用 MetaCubeX/meta-rules-dat 的 mrs 格式（D13，第 11.2 节）。
+
+之后是方案设计、验证计划、详细设计和实现。测试沿用 vps-hardening 的方式：CI 虚拟机，再加一台测试 VPS。
 
 ## 许可证
 

@@ -2,22 +2,23 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | v0.2 草案：按用户 2026-10-26 的答复（U4）关闭 OQ-2～OQ-4（D6～D8）：订阅主机名首版不开启 Cloudflare 代理；首版不设流量上限和到期时间；分流规则在 3X-UI 中统一配置，规则的内容待定（OQ-5）。修改第 2、3 节，FR-02～FR-05、FR-07、FR-09、FR-11 和第 9～11、13 节。按 CodeRabbit 对拉取请求 #1 的意见：第 10.1 节只保留核实过的事实，客户端内核版本的推断移到 A-4，FR-11 记录客户端显示的内核版本；迁移时订阅主机名和节点地址都要改为指向新机（SC5、FR-02、FR-09）；新增 R-10（证书透明度日志公开订阅主机名）；A-1 改为 vps-hardening 的正式版 `v0.1.1`（D9）。交付形态（OQ-1）仍待用户确认。待用户评审。v0.1 草案：按用户 2026-10-26 对五个需求问题的答复（U2）起草 |
-| 日期 | 2026-10-27（v0.1 为 2026-10-26） |
+| 状态 | v0.3 草案：按用户 2026-10-28 的答复（U6），v0.2 的其余内容无异议；3X-UI 改用 v3.11.0（D10）；先调优再安装 3X-UI，顺序不变（D11）；交付形态改为首次部署脚本加只读检查（D12，关闭 OQ-1）；分流规则以 Loyalsoldier/clash-rules 的白名单模式为基础改造，规则集用 MetaCubeX/meta-rules-dat 的 mrs 格式（D13，关闭 OQ-5）。修改第 1～4、6～13 节，新增 FR-12、R-11、R-12 和第 11.2～11.4 节；FR-04、FR-07 中"内置订阅页面已关闭"改为待核实（第 10.1 节）。待用户评审。v0.2 草案：按用户 2026-10-26 的答复（U4）关闭 OQ-2～OQ-4（D6～D8）：订阅主机名首版不开启 Cloudflare 代理；首版不设流量上限和到期时间；分流规则在 3X-UI 中统一配置，规则的内容待定（OQ-5）。修改第 2、3 节，FR-02～FR-05、FR-07、FR-09、FR-11 和第 9～11、13 节。按 CodeRabbit 对拉取请求 #1 的意见：第 10.1 节只保留核实过的事实，客户端内核版本的推断移到 A-4，FR-11 记录客户端显示的内核版本；迁移时订阅主机名和节点地址都要改为指向新机（SC5、FR-02、FR-09）；新增 R-10（证书透明度日志公开订阅主机名）；A-1 改为 vps-hardening 的正式版 `v0.1.1`（D9）。交付形态（OQ-1）仍待用户确认。待用户评审。v0.1 草案：按用户 2026-10-26 对五个需求问题的答复（U2）起草 |
+| 日期 | 2026-10-28（v0.2 为 2026-10-27，v0.1 为 2026-10-26） |
 | 上游依据 | 第 2 节的用户原话；[vps-hardening 需求规格说明](https://github.com/alieismy/vps-hardening/blob/master/docs/requirements.md) v1.10 第 7.2 节（已批准）中与本仓库的约定 |
 | 下游 | 方案设计、验证计划、详细设计（都还没有开始） |
 
 优先级：**P0** 必须，缺少则首版不成立；**P1** 应有，可以放到下一迭代；**P2** 可选；**P3** 明确不做。
 
-**证据状态。** 本文是需求，仓库里还没有实现，也没有运行证据。第 10.1 节标"已核实"的，是 2026-10-26 对照 3X-UI v3.10.2、Mihomo 和客户端的上游源码或文档核实的结果；标"推断"的，要在方案设计和测试中证实。
+**证据状态。** 本文是需求，仓库里还没有实现，也没有运行证据。第 10.1 节标"已核实"的，是 2026-10-26～28 对照 3X-UI v3.10.2 和 v3.11.0、Xray、Mihomo、客户端、vps-tuning 和规则仓库的上游源码或文档核实的结果；标"推断"的，要在方案设计和测试中证实。
 
 ## 1. 目的与范围
 
-在已经用 vps-hardening 加固并确认的新 VPS 上，用 3X-UI v3.10.2 搭建一个 VLESS + REALITY 代理节点，供 5～8 人使用；通过带证书的订阅，把每个人的配置分发到基于 Mihomo 内核的客户端（Sparkle、FlClash、Clash Verge Rev）。
+在已经用 vps-hardening 加固并确认、按 vps-tuning 调优的新 VPS 上，用 3X-UI v3.11.0（D10）搭建一个 VLESS + REALITY 代理节点，供 5～8 人使用；通过带证书的订阅，把每个人的配置分发到基于 Mihomo 内核的客户端（Sparkle、FlClash、Clash Verge Rev）。
 
 范围内：
 
 - 按固定版本安装 3X-UI，面板只监听回环地址，只经 SSH 隧道访问；
+- 首次部署脚本：在全新安装的 3X-UI 上写入入站、使用者、订阅设置和分流规则；之后的变更在面板中进行（D12）；
 - 一个 VLESS + REALITY 入站（443/tcp）；
 - 每个使用者的客户端（UUID 和订阅 ID），以及停用和撤销；
 - 订阅服务（2096/tcp，HTTPS），输出 Mihomo 配置；
@@ -31,7 +32,7 @@
 
 ### 2.1 用户原话
 
-这些原话是在 vps-hardening 的对话中给出的，也记录在它的需求第 2.1 节。这里只摘录与本仓库有关的条目，原文不改。
+U1～U5 是在 vps-hardening 的对话中给出的，也记录在它的需求第 2.1 节，这里只摘录与本仓库有关的条目；U6 起是本仓库的工作中给出的。原文不改。
 
 | 编号 | 日期 | 原话 |
 |---|---|---|
@@ -40,6 +41,7 @@
 | U3 | 2026-10-26 | 2.M5 通过后，目前生产只用Debian13，Ubuntu 24.04和Debian12 用虚拟机测试结果即可 ，确认发布正式版（vps-hardening U35 第 2 项。这一项是对 vps-hardening 正式版的决定；本仓库只引用其中"生产 VPS 目前只用 Debian 13"这一事实） |
 | U4 | 2026-10-26 | 2. 先发布vps-hardening后，确认vps-hardening无问题后，我们切换到vps-proxy-setup仓库再开始任务，单可以提前授权你对vps-proxy-setup进行合并、提交和推送 3.首版不开，只做DNS解析 4.首版不设置 5.在 3X-UI 里统一配置规则，但是这个任务等下切换到vps-proxy-setup仓库进行，先把vps-hardening所有任务完成和收尾。（vps-hardening U36 第 2～5 项。依次指：vps-hardening 收尾、确认没有问题之后再开始本仓库的工作，同时预先授权在本仓库中合并、提交和推送，原文的"单"按"但"理解；第 3～5 项依次答复 v0.1 草案的 OQ-2～OQ-4） |
 | U5 | 2026-10-27 | 2. 你评估 vps-hardening 没有问题之后就切换到vps-proxy-setup（vps-hardening U39 第 2 项。vps-hardening 的收尾评估见它的需求 D58） |
+| U6 | 2026-10-28 | 1. 3X-UI 版本是用3.10.2还是最新版3.11.0，请你分析3X-UI Releases后评估确定，用 vps-hardening 加固后是先做vps-tuning 优化还是先做vps-proxy-setup，请你评估哪种方式最优，其它需求无异议。 2.3X-UI 的设置 是按说明在面板里完成、检查 还是 由脚本写入设置再检查，请你评估，选取最优的方式  3.分流规则请联网搜索github 相关的仓库，选取一个最优的通用分流规则来进行改造（对 v0.2 草案的答复。第 1 项：3X-UI 的版本和执行顺序交由评估确定，v0.2 的其余内容没有意见；第 2 项答复 OQ-1；第 3 项答复 OQ-5） |
 
 ### 2.2 已确认决定
 
@@ -54,16 +56,20 @@
 | D7 | 首版不给使用者设流量上限和到期时间，只记录用量 | 2026-10-26 | U4 第 4 项（OQ-3） |
 | D8 | 分流规则在 3X-UI 中统一配置，所有使用者从订阅得到同样的规则，只在一处维护；不沿用默认的全部走代理。规则的内容待定（OQ-5） | 2026-10-26 | U4 第 5 项（OQ-4） |
 | D9 | vps-hardening 收尾之后开始本仓库的工作（vps-hardening D58）。加固以它的正式版 `v0.1.1` 为准（A-1）；在本仓库中合并、提交和推送已预先授权 | 2026-10-27 | U4 第 2 项，U5 |
+| D10 | 3X-UI 用 v3.11.0（tag 指向 `c621ba9014a6aa21fd7c9ecf45655e44e24ebf13`），不用 v3.10.2。v3.10.2 自带的 Xray v26.10.10 已被 Xray 撤版，v3.11.0 自带替代它的 v26.10.21；两版的 `install.sh` 相同，`x-ui.sh` 只有两处结果相同的写法改动，vps-hardening 第 7.2 节的行为表仍然适用。评估见第 11.3 节。实现开始时如果已有 v3.11.x 的修复版，按第 11.3 节的准则评估之后再固定 | 2026-10-28 | U6 第 1 项 |
+| D11 | 执行顺序不变：加固并确认之后，先按 vps-tuning 调优（应用、重启、验证），再安装和配置 3X-UI，之后做 vps-tuning 的严格验证并重启复核（README）。评估见第 11.4 节 | 2026-10-28 | U6 第 1 项 |
+| D12 | 交付形态：首次部署脚本加只读检查（FR-12、FR-07）。脚本只在全新安装的 3X-UI 上写入入站、使用者、订阅设置和分流规则；之后 3X-UI 的数据库是唯一的配置来源，日常变更在面板中进行，变更后执行检查。这改变了 v0.2 的建议，评估见第 11.1 节 | 2026-10-28 | U6 第 2 项（OQ-1） |
+| D13 | 分流规则以 Loyalsoldier/clash-rules 的白名单模式为基础改造：局域网和私有地址、中国大陆的域名和 IP 直连，其余走代理；规则集换成 MetaCubeX/meta-rules-dat 的 mrs 格式，经代理下载；首版不做广告拦截。规则文本保存在本仓库，由部署脚本写入 `subClashRules`。评估和改造内容见第 11.2 节 | 2026-10-28 | U6 第 3 项（OQ-5） |
 
-**从 vps-hardening 继承的约定**（它的需求第 7.2 节，D14、D16、D32；本仓库的需求以这些为前提，不重复理由）：
+**从 vps-hardening 继承的约定**（它的需求第 7.2 节，D14、D16、D32；本仓库的需求以这些为前提，不重复理由。3X-UI 的版本按 D10 改变，其余不变）：
 
-- 安装 3X-UI 时带版本参数 `v3.10.2`，运行前按 vps-hardening 需求第 10.1 节的摘要校验 `install.sh`；
+- 安装 3X-UI 时带版本参数。vps-hardening 约定的是 `v3.10.2`，本仓库按 D10 改为 `v3.11.0`。运行前按固定的摘要校验 `install.sh`：v3.11.0 的 `install.sh` 与 v3.10.2 的相同，摘要就是 vps-hardening 需求第 10.1 节记录的值；
 - 设 `XUI_ENABLE_FAIL2BAN=false`，不启用 IP Limit，Fail2ban 由 vps-hardening 管理；
 - 用 `XUI_PANEL_PORT` 传入加固时记录的面板端口（默认 2053）。面板只监听 127.0.0.1（`x-ui setting -listenIP 127.0.0.1`），只经 SSH 隧道访问；
 - 公开端口由管理员用 `vps-hardening ports --add` 开放，并从新的 SSH 会话确认。不使用 3X-UI 的防火墙菜单和 BBR 菜单；
 - 80/tcp 不开放；Cloudflare API Token 保存在 VPS 上，只授予签发证书所需的最小权限；
 - REALITY 回落等本机端口只监听 127.0.0.1；
-- v3.10.2 自带的 Xray 只接受提供 X25519MLKEM768 的 REALITY 客户端，Mihomo 要设 `support-x25519mlkem768: true`。
+- Xray 从 v26.9.8 起只接受提供 X25519MLKEM768 的 REALITY 客户端（v3.10.2 自带 v26.10.10，v3.11.0 自带 v26.10.21），Mihomo 要设 `support-x25519mlkem768: true`。
 
 ## 3. 角色与场景
 
@@ -76,7 +82,7 @@
 
 | 场景 | 内容 |
 |---|---|
-| SC1 新建 | 在加固并调优后的 Debian 13 上安装 3X-UI，配置入站、使用者、证书和订阅，开放 443/tcp 和 2096/tcp，检查通过 |
+| SC1 新建 | 在加固并调优后的 Debian 13 上（D11），用首次部署脚本安装 3X-UI，配置入站、使用者、证书和订阅（D12），开放 443/tcp 和 2096/tcp，检查通过 |
 | SC2 分发 | 管理员把每人自己的订阅地址发给本人；使用者在客户端导入，客户端定期更新 |
 | SC3 使用者变动 | 新增、停用、删除使用者；某人的订阅地址泄露时，只重置这个人 |
 | SC4 日常运行 | 证书自动续期；查看用量；定期或变更后执行检查 |
@@ -88,11 +94,11 @@
 
 ### FR-01 安装 3X-UI（P0）
 
-- 按第 2.2 节继承的约定安装 v3.10.2。
+- 由首次部署脚本（FR-12）按第 2.2 节继承的约定安装 v3.11.0（D10）。
 - 面板的用户名、密码和 `webBasePath` 都是随机值，由管理员保存。
 - 订阅证书配置完成之前不开放 2096/tcp：3X-UI 的订阅服务默认启用，对所有地址以 HTTP 提供（第 10.1 节）。vps-hardening 加固后 UFW 只放行 22/tcp，所以这一条只要求不要提前执行 `ports --add`。
 
-验收：3X-UI 的版本为 v3.10.2；面板端口只在 127.0.0.1 上监听；没有 `3x-ipl` jail；`vps-hardening verify` 通过。
+验收：3X-UI 的版本为 v3.11.0；面板端口只在 127.0.0.1 上监听；没有 `3x-ipl` jail；`vps-hardening verify` 通过。
 
 ### FR-02 VLESS + REALITY 入站（P0）
 
@@ -112,32 +118,34 @@
 - 客户端名称（3X-UI 的 email 字段）使用代号，不用真实姓名或联系方式。
 - 能停用、删除使用者；能单独重置某个人的 UUID 和订阅 ID。
 - 首版不设流量上限和到期时间，只记录用量（D7）。
+- 首次部署时由部署脚本按输入的代号创建（FR-12）；之后的新增、停用、删除和重置在面板中进行（D12）。
 
 验收：
 - 停用之后，这个使用者的连接失败，订阅不再返回可用的节点；
 - 重置之后，旧的订阅地址和 UUID 失效，其他人不受影响。
 
-停用之后订阅具体返回什么，在方案设计中按 v3.10.2 的行为核实。
+停用之后订阅具体返回什么，在方案设计中按 v3.11.0 的行为核实。
 
 ### FR-04 订阅（P0）
 
 - 订阅服务在 2096/tcp 上只以 HTTPS 提供，证书覆盖订阅主机名。设置 `subDomain`，只应答这个主机名。订阅主机名在 Cloudflare 上不开启代理（D6）。
-- 启用 Mihomo 格式（`subClashEnable`）。发给使用者的是 Mihomo 格式的地址（`/mihomo/<订阅 ID>` 或 `subClashPath`）。v3.10.2 生成的 Mihomo 配置会为 REALITY 写入 `support-x25519mlkem768: true`（第 10.1 节）。
+- 启用 Mihomo 格式（`subClashEnable`）。发给使用者的是 Mihomo 格式的地址（`/mihomo/<订阅 ID>` 或 `subClashPath`）。v3.11.0 生成的 Mihomo 配置会为 REALITY 写入 `support-x25519mlkem768: true`，与 v3.10.2 相同（第 10.1 节）。主机（Hosts）的"Mihomo X25519"开关保持关闭：v3.11.0 起它会去掉这个设置，握手随之失败（R-11）。
 - 原始链接格式在订阅启用时总是可用，链接中没有 ML-KEM 的设置。使用者不应导入原始链接，所以发给使用者的只有 Mihomo 地址（FR-11）。
-- JSON 格式和内置订阅页面保持关闭（v3.10.2 的默认值）。
+- JSON 格式保持关闭（默认值）。v3.11.0 对原始链接路径上的浏览器请求（`Accept: text/html` 或 `?html=1`）返回信息页面（第 10.1 节）；它能否关闭、是否需要关闭，在方案设计中核实。
 - 订阅路径用 3X-UI 初始化时生成的随机值。
 - 保留 `Subscription-Userinfo` 等响应头，客户端据此显示用量和到期时间。
-- 分流规则在 3X-UI 中统一配置（`subClashEnableRouting`、`subClashRules`，第 10.1 节），写入每个人的 Mihomo 配置（D8）。规则的内容见 OQ-5。
+- 分流规则在 3X-UI 中统一配置（`subClashEnableRouting`、`subClashRules`，第 10.1 节），写入每个人的 Mihomo 配置（D8）。规则的内容按 D13（第 11.2 节）。规则文本保存在本仓库，由部署脚本以本地 YAML 写入 `subClashRules`，不用远程地址。
 - 更新间隔默认 12 小时（`subUpdates`），是否调整在方案设计中确定。迁移之后，客户端最迟在一个间隔之后取得新的节点地址，使用者也可以手动更新。
 
 验收：
 - 从 VPS 之外取得订阅：证书链有效，主机名匹配；
 - 返回的 YAML 能被 Mihomo 解析，只包含这个使用者的节点，REALITY 带 `support-x25519mlkem768: true`，并包含配置的分流规则；
+- Mihomo 加载这份配置之后，规则集下载成功；私有地址、国内和国外的测试地址分别命中直连、直连和代理；
 - 用 IP 或其他主机名访问时不返回订阅；不存在的订阅 ID 不返回节点。
 
 ### FR-05 证书（P0）
 
-- 用 acme.sh 经 Cloudflare 走 DNS-01 签发，覆盖订阅主机名。3X-UI 菜单还会同时签发通配符证书（第 10.1 节）；是只签发订阅主机名，还是只用通配符证书，在方案设计中按 R-10 决定。
+- 由首次部署脚本（FR-12）用 acme.sh 经 Cloudflare 走 DNS-01 签发，覆盖订阅主机名。3X-UI 菜单还会同时签发通配符证书（第 10.1 节）；是只签发订阅主机名，还是只用通配符证书，在方案设计中按 R-10 决定。
 - 使用只限单个 Zone 的 API Token，不使用 Global API Key。具体权限组合在方案设计中按 acme.sh 的要求核实。Token 保存在 VPS 上，只有 root 可读。
 - acme.sh 使用固定版本，不启用自动升级。3X-UI 菜单从 `get.acme.sh` 安装当时的最新代码，并开启 `--auto-upgrade`（第 10.1 节），与固定版本的做法不一致。
 - 到期前自动续期，续期后订阅服务使用新证书。3X-UI 菜单默认在续期后执行 `x-ui restart`，所有连接会短暂中断（NFR-06）。
@@ -150,7 +158,7 @@
 
 ### FR-06 端口（P0）
 
-- FR-04 和 FR-05 完成之后，执行 `vps-hardening ports --add 443/tcp --add 2096/tcp`，并从新的 SSH 会话确认。
+- FR-04 和 FR-05 完成之后，执行 `vps-hardening ports --add 443/tcp --add 2096/tcp`，并从新的 SSH 会话确认。这一步由管理员执行，不在部署脚本中：确认要从新的 SSH 会话进行。
 - 面板端口和 80/tcp 不开放。
 
 验收：从 VPS 之外探测，22、443、2096 可达，面板端口和 80 被拦截；`vps-hardening verify` 通过。
@@ -161,7 +169,7 @@
 - 检查项至少包括：
   - 3X-UI 的版本，面板的监听地址，Fail2ban 和 IP Limit 没有由 3X-UI 启用；
   - 入站的协议、端口、REALITY 设置和节点地址，本机端口的监听地址；
-  - 订阅：只用 HTTPS，`subDomain` 已设置，Mihomo 格式和分流规则已启用，JSON 格式和内置页面已关闭；
+  - 订阅：只用 HTTPS，`subDomain` 已设置，Mihomo 格式和分流规则已启用，分流规则与本仓库的规则文本一致，JSON 格式已关闭；内置页面按 FR-04 中核实的结论检查；
   - 证书的主机名和剩余天数；
   - acme.sh 的版本、自动升级、续期任务和 Token 的类型，Token 文件的权限；
   - `vps-hardening verify` 的结果。
@@ -174,7 +182,7 @@
 
 ### FR-08 使用说明（P0）
 
-- 覆盖 SC1～SC7：每一步的命令、面板中的取值、预期结果和核对方法。
+- 覆盖 SC1～SC7：部署脚本的输入和每一步的命令，日常变更在面板中的取值，预期结果和核对方法。
 - 在 shell 中输入 Token 等秘密的方式，不会把秘密留在命令历史中（例如 `read -rs`）。
 - 只用文档保留的示例值（`example.com`、`192.0.2.x` 等），不出现真实的 IP、域名、订阅地址、UUID 和服务商名称。
 
@@ -183,14 +191,14 @@
 ### FR-09 备份、恢复与迁移（P1）
 
 - 备份 3X-UI 的数据库。数据库包含全部秘密，备份保存在 VPS 之外，由管理员加密保管。
-- 在另一台按 vps-hardening 加固的新机上恢复：安装相同版本的 3X-UI，恢复数据库，签发证书；把订阅主机名的 DNS 记录改为新机的地址；节点地址是另一个主机名时，它的记录同样修改，是 IP 时在面板中改为新机的地址（FR-02）；然后开放端口，执行检查。
+- 在另一台按 vps-hardening 加固的新机上恢复：用部署脚本安装相同版本的 3X-UI 并签发证书，恢复数据库，不执行首次部署的写入（FR-12）；把订阅主机名的 DNS 记录改为新机的地址；节点地址是另一个主机名时，它的记录同样修改，是 IP 时在面板中改为新机的地址（FR-02）；然后开放端口，执行检查。
 - 订阅主机名不变时，使用者不需要重新导入。
 
 验收：在两台虚拟机之间完成一次迁移，使用者的订阅地址不变；订阅主机名和节点地址都指向新机，更新订阅后连接成功。
 
 ### FR-10 升级与回退（P1）
 
-- 3X-UI 的新版本先评估再升级：对照 vps-hardening 需求第 7.2 节的行为表和本文的检查项。v3.11.0 已于 2026-10-25 发布（第 10.1 节）。
+- 3X-UI 的新版本先评估再升级：对照 vps-hardening 需求第 7.2 节的行为表、本文的检查项和第 11.3 节的准则。部署脚本的写入也要在新版本上重新验证（FR-12）。
 - 升级前备份数据库；回退方式为重新安装原来的版本并恢复备份。
 
 验收：在虚拟机中完成一次升级和一次回退，之后检查都通过。
@@ -201,6 +209,21 @@
 - 写明只导入 Mihomo 格式的订阅地址。
 
 验收：三个客户端各在一个平台上导入订阅并连接成功，记录客户端显示的内核版本；平台在验证计划中确定。
+
+### FR-12 首次部署脚本（P0）
+
+- 在 VPS 上以 root 执行：按 FR-01 安装 3X-UI，按 FR-05 安装固定版本的 acme.sh 并签发证书，再经回环地址上的 3X-UI API 写入入站（FR-02）、使用者（FR-03）、订阅设置和分流规则（FR-04）。
+- 只用于全新安装：3X-UI 中已有入站或使用者，或者订阅设置不是默认值时，拒绝写入，不改动任何设置。所以它不会改动正在使用的配置，也不提供重复执行时的合并。
+- 3X-UI 的版本不是脚本所针对的版本时拒绝执行（D10）。
+- 输入（第 6 节）从文件或交互读取；Token 等秘密不出现在命令行参数、输出和日志中。
+- 生成的秘密只写入 3X-UI 的数据库，以及一份只有 root 可读的文件（面板凭据和每个人的订阅地址）。管理员取走之后删除这份文件。
+- 写入失败时停止并报告。这时还没有使用者，恢复方式以卸载 3X-UI 后重新执行为基线，在方案设计中确定；不提供自动回滚。
+- 不执行 FR-06。
+
+验收：
+- 在虚拟机中从新机执行之后，FR-07 的检查全部通过；
+- 对已有配置的 3X-UI 执行时拒绝，数据库不变；
+- 输出、日志和归档中没有秘密（NFR-01）。
 
 ## 5. 非功能需求
 
@@ -224,13 +247,14 @@
 | REALITY 伪装目标 | 管理员 | 按方案设计的标准选择 |
 | 使用者代号 | 管理员 | 5～8 个（D2） |
 | 面板端口 | vps-hardening 的记录 | 默认 2053 |
+| 分流规则 | 本仓库 | 按 D13 编写的规则文本 |
 
-在 VPS 上生成：面板凭据、`webBasePath`、REALITY 密钥对、shortId、UUID、订阅 ID 和订阅路径。
+以上输入在首次部署时交给部署脚本（FR-12）。在 VPS 上生成：面板凭据、`webBasePath`、REALITY 密钥对、shortId、UUID、订阅 ID 和订阅路径。
 
 ## 7. 与其他仓库的约定
 
-- **vps-hardening：** 按第 2.2 节继承的约定。本仓库不改动 sshd、UFW 规则、Fail2ban 和自动更新的配置；公开端口只经 `vps-hardening ports` 开放。
-- **vps-tuning：** 不使用 3X-UI 的 BBR 菜单；调优在安装 3X-UI 之前完成。
+- **vps-hardening：** 按第 2.2 节继承的约定。本仓库不改动 sshd、UFW 规则、Fail2ban 和自动更新的配置；公开端口只经 `vps-hardening ports` 开放。3X-UI 的版本按 D10 改为 v3.11.0；vps-hardening 自己的 CI 仍用 v3.10.2 测试共存，v3.11.0 下的共存由本仓库的测试复核（FR-01、NFR-04）。
+- **vps-tuning：** 不使用 3X-UI 的 BBR 菜单；调优在安装 3X-UI 之前完成（D11）。vps-tuning 记录的业务验证基线是 3X-UI v3.4.2（第 10.1 节），v3.11.0 下的严格验证由本仓库的测试覆盖（NFR-04）。
 - **执行顺序：** 见 [README](../README.md)。
 
 ## 8. 范围外（P3）
@@ -240,6 +264,7 @@
 - 面板对外开放，面板证书；
 - IP Limit 和 3X-UI 自带的 Fail2ban；
 - 3X-UI 的防火墙菜单和 BBR 菜单；
+- 分流规则中的广告拦截（D13）；
 - 在已运行 3X-UI 的现网主机上执行任何步骤；
 - 客户端本身的安装和更新。
 
@@ -249,29 +274,41 @@
 |---|---|
 | A-1 | VPS 已经按 vps-hardening `v0.1.1` 加固并确认，并按 vps-tuning 调优（顺序见 README） |
 | A-2 | 管理员能在 Cloudflare 上添加 DNS 记录、创建 API Token |
-| A-3 | "Clash Verge"指维护中的 Clash Verge Rev。原来的 Clash Verge 仓库已归档，最后一个版本是 2023-10-30 的 v1.3.8（第 10.1 节），它带的内核早于 `support-x25519mlkem768`，推断连不上 v3.10.2 的节点 |
+| A-3 | "Clash Verge"指维护中的 Clash Verge Rev。原来的 Clash Verge 仓库已归档，最后一个版本是 2023-10-30 的 v1.3.8（第 10.1 节），它带的内核早于 `support-x25519mlkem768`，推断连不上 v3.11.0 的节点（Xray v26.9.8 起要求 ML-KEM） |
 | A-4 | 使用者的客户端是近期版本，内核支持 `support-x25519mlkem768`。Clash Verge Rev v2.5.8 和 Sparkle 1.26.9 在构建时下载 mihomo 当时的最新正式版（第 10.1 节），据此推断两者自带的内核是 v1.19.31 或之后的版本。置信度中高：构建脚本说明的是构建的输入，不能直接证明已发布的安装包中的内核版本，要在测试中按客户端显示的内核版本证实（FR-11） |
 | A-5 | 同一时间只有一个节点（一台 VPS） |
 | A-6 | 管理员经可信的渠道把订阅地址发给本人 |
 
 ## 10. 证据与风险
 
-### 10.1 已核实的事实（2026-10-26）
+### 10.1 已核实的事实（2026-10-26～28）
 
 | 事实 | 来源 |
 |---|---|
-| v3.10.2 的订阅有三种格式，按路径区分：原始链接（`subPath`，订阅启用时总是可用）、JSON（`subJsonEnable`）、Clash/Mihomo（`subClashEnable`，另有 `/mihomo/` 别名）。Mihomo 格式是完整的配置文件 | 3X-UI v3.10.2 的 `docs/content/docs/en/config/subscription.mdx` |
-| 默认值：订阅服务启用，监听所有地址，端口 2096，没有证书时以 HTTP 提供；Mihomo 格式和 JSON 格式关闭；订阅路径和 Mihomo 路径在初始化时随机生成 | v3.10.2 的 `internal/web/service/setting.go` |
-| Mihomo 配置中，REALITY 节点带 `support-x25519mlkem768: true`（源码注释：Xray 26.9.8 起拒绝没有 ML-KEM 密钥交换的 REALITY 握手） | v3.10.2 的 `internal/sub/clash_service.go` |
-| 默认的 Mihomo 配置只有一个 `PROXY` 组和 `MATCH,PROXY` 规则；`subClashEnableRouting` 和 `subClashRules` 可以合并自定义的规则、规则集和代理组 | 同上 |
-| 节点地址的取值顺序：入站指定的分享地址、节点地址、入站的监听地址、配置的公开主机名，最后是请求订阅时的主机名 | v3.10.2 的 `internal/sub/service.go`（`resolveInboundAddress`） |
-| 菜单中的 Cloudflare 证书：可以用 API Token 或 Global API Key；acme.sh 没有安装时执行 `curl -s https://get.acme.sh \| sh`；签发主域名加通配符；默认续期后执行 `x-ui restart`；开启 acme.sh 的 `--auto-upgrade`；只提示把证书用于面板，不设置订阅服务 | v3.10.2 的 `x-ui.sh`（`ssl_cert_issue_CF`、`install_acme`），文件摘要与 vps-hardening 需求第 10.1 节记录的相同 |
-| 面板提供 REST API，可以用 Bearer token 认证；token 具有完全的管理权限 | v3.10.2 的 `docs/content/docs/en/reference/api/index.mdx` |
+| v3.10.2 的订阅有三种格式，按路径区分：原始链接（`subPath`，订阅启用时总是可用）、JSON（`subJsonEnable`）、Clash/Mihomo（`subClashEnable`，另有 `/mihomo/` 别名）。Mihomo 格式是完整的配置文件。v3.11.0 的文档相同，另列出只给 Clash for Windows 用的 `/clash-legacy/`；对原始链接路径带 `Accept: text/html` 或 `?html=1` 的请求返回可读的信息页面 | 3X-UI v3.10.2 和 v3.11.0 的 `docs/content/docs/en/config/subscription.mdx` |
+| 默认值：订阅服务启用，监听所有地址，端口 2096，没有证书时以 HTTP 提供；Mihomo 格式和 JSON 格式关闭；订阅路径和 Mihomo 路径在初始化时随机生成。v3.11.0 相同 | v3.10.2 和 v3.11.0 的 `internal/web/service/setting.go` |
+| Mihomo 配置中，REALITY 节点带 `support-x25519mlkem768: true`（源码注释：Xray 26.9.8 起拒绝没有 ML-KEM 密钥交换的 REALITY 握手）。v3.11.0 相同；v3.11.0 起主机的"Mihomo X25519"开关生效，打开时写入 `false` | v3.10.2 的 `internal/sub/clash_service.go`；v3.11.0 的 `docs/content/docs/en/config/reality.mdx`，3X-UI PR #6803 |
+| 默认的 Mihomo 配置只有一个 `PROXY` 组和 `MATCH,PROXY` 规则。`subClashRules` 可以是本地的 YAML（规则列表，或者带 `rules`、`rule-providers` 等键的映射），也可以是远程地址；自定义规则中有 `MATCH` 时替换默认规则，否则放在默认规则之前。远程地址只取 `proxy-groups`、`rule-providers` 和 `rules`（v3.11.0 起可选再取 `dns`、`sniffer`），缓存 10 分钟 | v3.11.0 的 `internal/sub/clash_service.go`（`mergeClashRulesYAML`、`mergeRemoteClashRules`、`mergeClashRules`）和 `remote_routing.go`；v3.10.2 有同名的函数 |
+| 节点地址的取值顺序：入站指定的分享地址、节点地址、入站的监听地址、配置的公开主机名，最后是请求订阅时的主机名。v3.11.0 相同（`ShareAddrStrategy` 为 `custom` 时分享地址优先） | v3.10.2 和 v3.11.0 的 `internal/sub/service.go`（`resolveInboundAddress`） |
+| 菜单中的 Cloudflare 证书：可以用 API Token 或 Global API Key；acme.sh 没有安装时执行 `curl -s https://get.acme.sh \| sh`；签发主域名加通配符；默认续期后执行 `x-ui restart`；开启 acme.sh 的 `--auto-upgrade`；只提示把证书用于面板，不设置订阅服务。v3.11.0 的这些函数相同 | v3.10.2 的 `x-ui.sh`（`ssl_cert_issue_CF`、`install_acme`），文件摘要与 vps-hardening 需求第 10.1 节记录的相同；v3.11.0 的 `x-ui.sh`（见下文的比较） |
+| 面板提供 REST API，可以用 Bearer token 认证；v3.10.2 的 token 具有完全的管理权限。v3.11.0 的 token 分权限范围：`admin` 可以使用全部接口，`monitor` 只读状态和指标。写入入站、使用者和设置的接口（`/panel/api/inbounds/add`、`/panel/api/clients/add`、`/panel/api/setting/update`），以及生成 X25519 密钥和 UUID 的接口，都在 OpenAPI 文档中 | v3.10.2 的 `docs/content/docs/en/reference/api/index.mdx`；v3.11.0 的 `docs/content/docs/en/reference/api/`（`api-tokens.mdx`、`inbounds.mdx`、`clients.mdx`、`settings.mdx`、`server.mdx`） |
 | Mihomo 的 REALITY 选项 `support-x25519mlkem768` 于 2025-05-15 加入，v1.19.10 起包含；最新版本为 v1.19.33（2026-10-21） | MetaCubeX/mihomo 的提交 `5cf0f18`，`adapter/outbound/reality.go` |
 | FlClash v0.9.2（2026-10-24）所带的内核包含这个选项 | FlClash 的子模块 `core/Clash.Meta` 在该版本指向的提交 |
 | Clash Verge Rev 的最新版本为 v2.5.8（2026-10-09），Sparkle 为 1.26.9（2026-09-30）。两者都不固定内核版本：构建时下载 MetaCubeX/mihomo 当时的最新正式版和 Prerelease-Alpha（2026-10-27 核实）。这两个日期上，mihomo 的最新正式版是 v1.19.31（2026-09-14）或 v1.19.32（2026-09-30） | 两个项目的 GitHub Releases；Clash Verge Rev v2.5.8 的 `scripts/prebuild.mjs`，Sparkle 1.26.9 的 `scripts/prepare.ts`；mihomo 的 GitHub Releases |
 | 原来的 Clash Verge 仓库已归档，最后一个版本是 v1.3.8（2023-10-30） | zzzgydi/clash-verge 的 GitHub 页面 |
-| 3X-UI v3.11.0 于 2026-10-25 发布，晚于 v3.10.2 的基线 | 3X-UI 的 GitHub Releases |
+| 3X-UI v3.11.0 的 tag 指向 `c621ba9014a6aa21fd7c9ecf45655e44e24ebf13`，Release 发布于 2026-10-25T19:09:16Z；到 2026-10-28T06:49Z 仍是最新的正式版，main 分支在它之后没有新提交。`install.sh` 的 SHA-256 与 v3.10.2 相同（`9684bae4f769b2127fcceceb4f200045657381311867529e6ba76c6b58e2825d`）；`x-ui.sh` 的 SHA-256 为 `26c229d5fb3b184e81581b4b223b801582ca7cf5908aaedeb8d1c7c70ad4cc25`，与 v3.10.2 相比只有两处 `[[ $# > n ]]` 改为 `[[ $# -gt n ]]`，对任何参数个数结果都相同 | GitHub API；两个 tag 的文件 |
+| 3X-UI 的发布流程固定 Xray 的版本：v3.10.2 为 v26.10.10，v3.11.0 为 v26.10.21 | 两个 tag 的 `.github/workflows/release.yml`；两版的发布说明 |
+| Xray v26.10.10 已撤版，Release 和 tag 都已删除。v26.10.21 的发布说明：印度的八张中间证书因私钥过于简单而被破解，这一版内置的根证书库移除了三张根证书（v26.10.10、v26.10.17 内置这些证书，已撤版），并用 Go 1.27.3 编译，即使操作系统的证书库没有更新也会过滤这些证书；用户应尽快升级 | XTLS/Xray-core 的 Releases，PR #7212（更新 `golang.org/x/crypto/x509roots/fallback`） |
+| Xray 的 TLS 客户端默认使用系统证书库，只在系统证书库不可用或配置为不用系统证书时，才用内置的根证书库 | Xray v26.10.21 的 `transport/internet/tls/config.go`（`systemCertPool`、`loadCA`） |
+| v3.11.0 中与本仓库有关的改动：所有订阅响应带 `Cache-Control: no-store`；新数据库的第一个面板用户随机生成；关闭 Fail2ban 时仍记录客户端 IP；主机的"Mihomo X25519"开关生效 | v3.11.0 的发布说明 |
+| v3.11.0 发布后到 2026-10-28T06:49Z 有 18 个新 issue。报告 v3.11.0 缺陷的涉及 Telegram 机器人、TUIC、Hysteria2、AmneziaWG、Trojan 出站、节点、Cloudflare 后面的面板和面板中切换 Xray 版本，本仓库都不使用。"更新后 `webBasePath` 被重置"只在路径短于 4 个字符时发生，v3.10.2 也有；"三台节点夜间断连"的回复指向客户端的 Xray 太旧（v26.9.8 起要求 ML-KEM），v3.10.2 的内核同样要求 | 3X-UI 的 issue #6937～#6984 |
+| 某些网络的 DPI 会丢弃带 ML-KEM 的 ClientHello（约 1.8 KB，两个 TCP 分段）的第二个分段。报告者在两台服务器上用 tcpdump 复现：Mihomo 1.19.32 不带 ML-KEM 时 20 次成功 20 次，带 ML-KEM 时 20 次成功 3 次。没有说明是哪个地区的网络 | 3X-UI PR #6803 |
+| 3X-UI 的 `install.sh` 每次安装和更新只重写自己的 drop-in `x-ui.service.d/10-xui-sandbox.conf`，注释说明其他 drop-in 不受影响；`x-ui.service.debian` 中没有 `LimitNOFILE` | v3.11.0 的 `install.sh`、`x-ui.service.debian` |
+| vps-tuning 在安装 3X-UI 之前应用时，预先创建 `x-ui.service` 的 drop-in（`90-proxy-vps.conf`，`LimitNOFILE=65536`），这时 `verify` 把代理服务未安装视为正常。它的操作指南要求先完成调优和重启验证，再安装 3X-UI，安装后做严格验证，并重启后再验证一次；`apply` 时 x-ui 已在运行的，要重启服务或主机之后再做严格验证。记录的业务验证基线是 3X-UI v3.4.2、Xray v26.6.27，其他版本要单独验证 | vps-tuning 的 README 和 `docs/usage.md`（v0.2.0-rc.4） |
+| Mihomo v1.19.10 的规则集支持 `type`、`behavior`、`path`、`url`、`proxy`（经指定的代理下载）、`format`（包括 `mrs`）、`interval`、`size-limit` 和 `payload`；默认的地理数据（`geox-url`）从 MetaCubeX/meta-rules-dat 下载 | MetaCubeX/mihomo v1.19.10 的 `rules/provider/parse.go`、`constant/provider/interface.go`、`config/config.go` |
+| Loyalsoldier/clash-rules：每天北京时间 6:30 自动构建，最近一次为 2026-10-27T22:35Z；规则集是文本格式，`direct.txt` 2,278,993 字节、`proxy.txt` 622,438 字节、`reject.txt` 5,605,483 字节、`cncidr.txt` 219,337 字节；README 推荐白名单模式（没有命中规则的流量都走代理） | 它的 README 和 `release` 分支 |
+| MetaCubeX/meta-rules-dat：`meta` 分支提供 Mihomo 的 mrs 规则集，最近一次构建为 2026-10-28T01:34Z。`geo/geosite/cn.mrs` 532,882 字节、`geo/geosite/geolocation-!cn.mrs` 198,802 字节、`geo/geosite/private.mrs` 781 字节、`geo/geoip/cn.mrs` 38,553 字节、`geo/geoip/private.mrs` 236 字节。`geosite:cn` 的来源换成 blackmatrix7/ios_rule_script 的 ChinaMax；geoip 与 Loyalsoldier/v2ray-rules-dat 相同 | 它的 README 和 `meta` 分支 |
+| 第 11.2 节候选仓库的星标数、最后推送日期和许可证 | GitHub API（2026-10-28） |
 | Cloudflare 代理的 HTTPS 端口为 443、2053、2083、2087、2096、8443；除 443 外默认不缓存 | Cloudflare 文档 Network ports |
 
 ### 10.2 风险
@@ -288,18 +325,42 @@
 | R-8 | 订阅服务在证书配置之前以 HTTP 监听所有地址 | 端口一旦开放，订阅内容会以明文传输 | 证书配置完成之前不开放 2096/tcp（FR-01、FR-06） |
 | R-9 | IP 被封 | 节点不可用 | 迁移（FR-09）；订阅主机名不变时，使用者只需更新订阅 |
 | R-10 | 公开签发的证书都记入证书透明度日志，任何人都能查到订阅主机名；它不开启代理（D6），解析结果就是 VPS 的地址 | 主机名和 VPS 的地址对应起来，可以被扫描或用于封锁（推断，置信度中） | 主机名不与使用者的身份相关；`subDomain` 和随机的订阅路径；方案设计中评估只用通配符证书（FR-05）：日志中只出现 `*.<域名>`。这只防止从日志中列出主机名，不能防止知道或猜到主机名的人解析它，也不能防止对 VPS 地址的扫描 |
+| R-11 | 某些网络丢弃带 ML-KEM 的较大 ClientHello（第 10.1 节，3X-UI PR #6803） | 这些网络中的使用者连接失败或时断时续。是否影响本仓库的使用者不知道：只有一个报告者，没有说明地区 | 测试和试用中记录失败所在的网络。v3.11.0 起主机的"Mihomo X25519"开关可以去掉 ML-KEM，但 Xray v26.9.8 起服务端不接受这样的握手，要换用更早的 Xray，与 D10 的理由冲突。出现时另行评估 |
+| R-12 | 规则集来自第三方，客户端按间隔自动更新（D13） | 规则数据出错或被篡改时，流量走错路径，例如应走代理的流量直连。规则集只是数据，不能执行代码 | 只用 MetaCubeX/meta-rules-dat：Mihomo 默认的地理数据也来自这个仓库（第 10.1 节），不多信任一方。需要时可以改为固定到某个提交 |
 
 ## 11. 待决事项
 
 | 编号 | 事项 | 建议 |
 |---|---|---|
-| OQ-1 | 交付形态：脚本加验证，还是文档加检查脚本（U2 e） | 文档加只读检查脚本，评估见第 11.1 节。待用户确认 |
+| OQ-1 | 交付形态：脚本加验证，还是文档加检查脚本（U2 e） | 已决定（D12）：首次部署脚本加只读检查，评估见第 11.1 节。v0.2 的建议：文档加只读检查脚本 |
 | OQ-2 | 订阅主机名在 Cloudflare 上是否开启代理 | 已决定（D6）：首版不开启，只做 DNS 解析。v0.1 的建议：首版不开启（DNS only），证书由 VPS 上的 Let's Encrypt 证书提供。开启代理的好处：IP 被封时，订阅仍可能经 Cloudflare 更新；2096 是 Cloudflare 支持代理的 HTTPS 端口之一，默认不缓存（第 10.1 节）。代价：Cloudflare 能看到订阅内容，节点地址要另用 DNS only 的记录，配置更复杂 |
 | OQ-3 | 每人是否设流量上限和到期时间 | 已决定（D7）：首版不设，只记录用量。v0.1 的建议：首版不设，只记录用量；客户端会显示用量 |
 | OQ-4 | 分流规则：沿用 3X-UI 默认的全部走代理（`MATCH,PROXY`），还是在 3X-UI 中统一配置规则（例如国内直连） | 已决定（D8）：在 3X-UI 中统一配置；规则的内容另见 OQ-5。v0.1 的建议：在 3X-UI 中统一配置，所有人得到同样的规则，只在一处维护；规则内容请你提供，或沿用你现有的配置文档 |
-| OQ-5 | 分流规则的内容（D8） | 请你提供规则，或者确认一份基线：局域网和私有地址直连，中国大陆的域名和 IP 直连，其余走代理。基线用 Mihomo 内置的 GEOSITE、GEOIP 数据，还是外部规则集，在方案设计中按 3X-UI v3.10.2 `subClashRules` 支持的写法确定 |
+| OQ-5 | 分流规则的内容（D8） | 已决定（D13）：以 Loyalsoldier/clash-rules 的白名单模式为基础，规则集用 MetaCubeX/meta-rules-dat 的 mrs 格式，评估见第 11.2 节。v0.2 的建议：请你提供规则，或者确认一份基线：局域网和私有地址直连，中国大陆的域名和 IP 直连，其余走代理。基线用 Mihomo 内置的 GEOSITE、GEOIP 数据，还是外部规则集，在方案设计中按 3X-UI v3.10.2 `subClashRules` 支持的写法确定 |
 
 ### 11.1 OQ-1 评估：交付形态
+
+**v0.3 的结论：首次部署脚本加只读检查（D12）。** 置信度：中。用户要求在"按说明在面板里完成、检查"和"由脚本写入设置再检查"之间选取最优的方式（U6 第 2 项）。重新评估时把脚本写入分成两种：可以重复执行、以脚本为准的声明式写入，和只在全新安装上执行一次的首次部署写入。
+
+| 方面 | 面板中手工设置加检查（v0.2 的建议） | 首次部署脚本加检查（D12） | 声明式脚本加检查 |
+|---|---|---|---|
+| 配置的来源 | 只有 3X-UI 的数据库 | 部署之后只有数据库 | 脚本的声明和面板中的修改并存 |
+| 改坏正在使用的配置 | 不会 | 不会：已有配置时拒绝写入 | 会：每次执行都可能覆盖 |
+| 首次部署的人为失误 | 会有，由检查发现后手工修改 | 少：取值固定，CI 每次都验证 | 少 |
+| 测试覆盖的路径 | CI 用 API 布置，是替代的路径；实际的面板操作只由检查事后核对 | CI 执行的就是实际使用的脚本 | 同左 |
+| 3X-UI 升级 | 面板操作的说明可能随版本变化 | 写入代码要在新版本上重新验证（FR-10） | 同左，还要处理合并 |
+| 开发和测试成本 | 中 | 中高：多出版本检查、全新安装的判断和秘密的输出；写入代码与 CI 布置的代码是同一份 | 高 |
+
+理由：
+
+1. v0.2 反对脚本写入的两条主要理由，针对的是可以重复执行、以脚本为准的写法：形成两个配置来源（下文理由 1），以及写入出错会改坏正在使用的配置（下文理由 3）。只在全新安装上写入一次、之后不再写入，这两条都不成立。
+2. 首次部署要填的值多：入站和 REALITY 约十项，每个使用者几项，订阅约十项，还有一段分流规则的 YAML。手工输入的失误要等检查发现再改；脚本写入的值固定，并且每次 CI 都验证。
+3. CI 本来就要用 API 布置 3X-UI（第 12 节）。把这部分代码做成首次部署脚本，测试覆盖的就是实际使用的路径；手工设置时，CI 验证的是替代的路径。
+4. v0.2 的理由 2（变更不频繁）和理由 4（不需要 vps-hardening 那样的确认和自动恢复）仍然成立：省下的时间不是主要收益，脚本也不需要自动回滚（FR-12）。
+
+**最强的反对理由：** 多一份要随 3X-UI 版本维护的写入代码，接口变化时要重新验证；脚本要处理生成的秘密。缓解：版本固定，版本不符时拒绝执行（D10、FR-12）；CI 每次都验证写入；秘密只写入数据库和只有 root 可读的文件（FR-12）。
+
+以下是 v0.2 的评估，保留原文。
 
 两种形态都要有检查。区别在于 3X-UI 中的设置由谁写入：
 
@@ -328,11 +389,99 @@
 - 检查多次发现同一种手工失误；
 - 节点超过两台。
 
+### 11.2 OQ-5 评估：分流规则
+
+**结论：以 Loyalsoldier/clash-rules 的白名单模式为基础，规则集换成 MetaCubeX/meta-rules-dat 的 mrs 格式（D13）。** 置信度：中高。白名单模式就是 v0.2 提出的基线：局域网和私有地址、中国大陆的域名和 IP 直连，没有命中规则的流量都走代理。
+
+候选仓库（2026-10-28 的 GitHub API；"内容"取自仓库的说明）：
+
+| 仓库 | 星标 | 最后推送 | 许可证 | 内容 | 结论 |
+|---|---|---|---|---|---|
+| Loyalsoldier/clash-rules | 29,007 | 2026-10-27 | GPL-3.0 | 文本格式的规则集，以及白名单、黑名单两种规则模板；每天构建 | 选为改造的基础：使用最广，结构清楚，推荐的白名单模式与基线一致 |
+| MetaCubeX/meta-rules-dat | 5,414 | 2026-10-28 | GPL-3.0 | Mihomo 项目的地理数据，以及 mrs、yaml、list 格式的规则集 | 用作规则集的来源 |
+| blackmatrix7/ios_rule_script | 28,425 | 2026-10-27 | GPL-2.0 | 分流规则、重写规则和脚本，按应用和服务划分 | 不选：分得过细，作为通用基线维护成本高（判断） |
+| ACL4SSR/ACL4SSR | 6,863 | 2026-10-25 | CC-BY-SA-4.0 | Clash 规则碎片，订阅转换用的配置 | 不选：面向订阅转换模板（判断） |
+| Aethersailor/Custom_OpenClash_Rules | 6,695 | 2026-10-28 | CC-BY-SA-4.0 | 面向 OpenClash 的配置、订阅转换模板和规则 | 不选：面向路由器上的 OpenClash |
+| SukkaW/Surge | 4,605 | 2026-10-26 | AGPL-3.0 | 面向 Surge、Mihomo、Clash Premium、sing-box 的规则 | 不选：多信任一个数据来源（R-12） |
+| DustinWin/ruleset_geodata | 1,438 | 2026-10-27 | GPL-3.0 | 为 Clash、Mihomo、sing-box 定制的规则集和地理数据 | 不选：同上 |
+
+改造的内容：
+
+1. **规则集换成 MetaCubeX/meta-rules-dat 的 mrs 格式**：域名用 `private`、`geolocation-!cn`、`cn`，IP 用 `private`、`cn`。理由：mrs 是 Mihomo 原生的二进制格式，体积小得多（`cn.mrs` 约 0.5 MB，Loyalsoldier 的 `direct.txt` 约 2.3 MB；两者的数据来源不同，只作量级参考），对手机客户端更合适；Mihomo 默认的地理数据也来自这个仓库，不多信任一方（R-12）；Mihomo v1.19.10 起支持，与最低版本一致（第 10.1 节）。
+2. **去掉与通用分流无关的部分**：`applications`（按进程名匹配，只对桌面客户端有效）、两条面板网址的 `DOMAIN` 规则、`reject`（广告拦截：误拦时排查成本高，首版不做，第 8 节）。Apple、微软等在国内有节点的服务是否单独直连，在详细设计中按规则集的内容确定。
+3. **规则集经代理下载**（`proxy: PROXY`，更新间隔 86400 秒）：中国大陆常常无法直接访问 `raw.githubusercontent.com`（推断；Loyalsoldier 的 README 也提示了这种情况）。节点不可用时规则集无法首次下载，这时本来也无法代理；已下载的规则集保留在客户端（推断，在测试中核实）。
+4. **IP 规则**：私有地址加 `no-resolve`。国内 IP 规则是否加 `no-resolve`，在详细设计中权衡：加上时，没有列入域名规则的国内网站会走代理；不加时，这些域名会先在本地解析，查询发给本地的 DNS。
+5. **规则文本保存在本仓库**，由部署脚本以本地 YAML 写入 `subClashRules`，不用远程地址：不依赖面板访问 GitHub，规则的版本随仓库发布；检查核对它与仓库中的文本一致（FR-07）。
+6. **沿用 3X-UI 生成的 `PROXY` 组**，规则以 `MATCH,PROXY` 结尾：自定义规则中有 `MATCH` 时，3X-UI 用它替换默认规则（第 10.1 节）。
+7. **规则集跟随 `meta` 分支的最新构建**，不固定提交（R-12）。
+
+改造之后的形式（示意，名称、顺序和取舍以详细设计为准）：
+
+```yaml
+rule-providers:
+  private-domain:
+    type: http
+    behavior: domain
+    format: mrs
+    proxy: PROXY
+    interval: 86400
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/private.mrs
+  # non-cn-domain：geo/geosite/geolocation-!cn.mrs；cn-domain：geo/geosite/cn.mrs
+  # private-ip、cn-ip：behavior: ipcidr，geo/geoip/private.mrs、geo/geoip/cn.mrs
+rules:
+  - RULE-SET,private-domain,DIRECT
+  - RULE-SET,non-cn-domain,PROXY
+  - RULE-SET,cn-domain,DIRECT
+  - RULE-SET,private-ip,DIRECT,no-resolve
+  - RULE-SET,cn-ip,DIRECT
+  - MATCH,PROXY
+```
+
+### 11.3 3X-UI 版本评估：v3.10.2 还是 v3.11.0
+
+**结论：v3.11.0（D10）。** 置信度：中高。用户要求分析 3X-UI 的 Releases 后评估确定（U6 第 1 项）。证据见第 10.1 节。
+
+| 方面 | v3.10.2 | v3.11.0 |
+|---|---|---|
+| 自带的 Xray | v26.10.10，已撤版 | v26.10.21，Xray 要求尽快升级到的版本 |
+| `install.sh` 和 `x-ui.sh` | vps-hardening 核实过的基线 | `install.sh` 相同；`x-ui.sh` 两处写法改动，结果相同 |
+| 与本仓库有关的改动 | 无 | 订阅响应带 `Cache-Control: no-store`；第一个面板用户随机生成；"Mihomo X25519"开关生效（R-11） |
+| 已报告的缺陷 | 没有逐一核查 | 发布之后报告的缺陷都在本仓库不使用的功能上 |
+| 发布至今 | 14 天 | 约 2.5 天，main 分支在它之后没有新提交 |
+| 与 vps-hardening 的约定 | 一致 | 版本号不同；共存由本仓库的测试复核（第 7 节） |
+
+理由：
+
+1. 被撤版的内核不应作为新部署的固定版本。撤版的原因在 Xray 的 TLS 客户端：默认使用系统证书库，只有系统证书库不可用或被禁用时才用内置的根证书库（第 10.1 节）。所以对本仓库的实际影响可能很小（推断，置信度中）；但上游已撤下这个版本并要求升级，继续固定它就要自己承担这个判断。
+2. 与 vps-hardening 的约定有关的脚本没有变化：`install.sh` 的摘要相同，`x-ui.sh` 中 vps-hardening 第 7.2 节涉及的函数没有变化。
+3. v3.11.0 的改动多在本仓库不使用的功能上（AmneziaWG、Telegram 机器人、节点、主机的新功能）；VLESS + REALITY 和 Mihomo 订阅的行为在第 10.1 节核实过的范围内没有变化。
+
+**最强的反对理由：** v3.11.0 发布不久、改动大。此前 v3.10.0 两天后出了 v3.10.2，v3.8.0 两天后出了 v3.8.5，v3.11.0 之后也可能很快有修复版。所以 D10 规定：实现开始时如果已有 v3.11.x 的修复版，按以下准则评估之后再固定：
+
+- 自带的 Xray 没有被撤版；
+- `install.sh` 和 `x-ui.sh` 与 vps-hardening 第 7.2 节的行为表一致；
+- 已报告的缺陷不涉及本仓库使用的功能；
+- 本文第 10.1 节核实过的订阅和接口行为不变。
+
+### 11.4 执行顺序评估：先调优，还是先安装 3X-UI
+
+**结论：先调优，再安装 3X-UI，维持 README 的顺序（D11）。** 置信度：中高。用户要求评估加固之后先做 vps-tuning 还是先做本仓库（U6 第 1 项）。
+
+| 方面 | 先调优（现行） | 先安装 3X-UI |
+|---|---|---|
+| 代理的验收 | 在最终的内核网络参数下做一次 | 调优改变网络参数之后，要再做一遍检查和连接验收 |
+| x-ui 的 NOFILE | 调优预置的 drop-in 在 x-ui 第一次启动时就生效 | `apply` 之后要重启 x-ui 或主机，才能做严格验证 |
+| 出问题时的排查 | 调优时还没有代理服务，两者分开排查 | 调优出问题时要同时排除代理的影响 |
+| 重启次数（加固之后） | 两次：调优之后，安装 3X-UI 之后复核 | 一次：调优之后的重启兼作复核 |
+| 上游的说明 | vps-tuning 操作指南写明的顺序；vps-hardening D27、D41、D42 | vps-tuning 支持，但要额外重启 x-ui 或主机 |
+
+理由：先调优的唯一代价是多一次重启（约一到两分钟，推断）；先安装 3X-UI 省下这次重启，却要在调优之后重做代理的验收。3X-UI 的 `install.sh` 只重写自己的 drop-in，不影响调优预置的 `90-proxy-vps.conf`（第 10.1 节），所以先调优没有冲突。
+
 ## 12. 验证方法
 
 沿用 vps-hardening 的做法，具体内容在验证计划中确定：
 
-- **CI 虚拟机：** Debian 13 amd64。测试代码用 API 布置 3X-UI，并在虚拟机中运行 Mihomo 实际连接。证书用测试 CA，不使用真实的 Token 和域名。
+- **CI 虚拟机：** Debian 13 amd64。用首次部署脚本（FR-12）布置 3X-UI，与实际使用的路径相同；并在虚拟机中运行 Mihomo 实际连接。证书用测试 CA，不使用真实的 Token 和域名。
 - **测试 VPS：** 真实的签发、订阅和客户端连接要用你的域名和 Cloudflare API Token，执行之前另行征求你的授权。
 - **判定：** 按归档的证据逐项判定，不以 CI 显示通过为准。
 
@@ -345,10 +494,14 @@
 | U2 b、D3 | FR-02，第 8 节 |
 | U2 c、D4 | FR-04～FR-06 |
 | U2 d、D5 | FR-04，FR-11，A-3、A-4 |
-| U2 e | 第 11.1 节，OQ-1 |
+| U2 e | 第 11.1 节，OQ-1（已关闭，见 D12） |
 | U3 | NFR-03 |
 | U4、D6 | FR-04，FR-09，R-10（OQ-2 已关闭） |
 | U4、D7 | FR-03（OQ-3 已关闭） |
 | U4、D8 | FR-04、FR-07，OQ-5（OQ-4 已关闭） |
 | U4、U5、D9 | A-1，本仓库的工作顺序和授权 |
+| U6 第 1 项、D10 | 第 1 节，第 2.2 节继承的约定，FR-01、FR-03、FR-04、FR-10、FR-12，A-3，第 7 节，R-11，第 11.3 节 |
+| U6 第 1 项、D11 | 第 1 节，SC1，第 7 节，第 11.4 节，README 的执行顺序 |
+| U6 第 2 项、D12 | 第 1 节，SC1，FR-01、FR-03～FR-06、FR-08、FR-09、FR-12，第 6 节，第 12 节，第 11.1 节（OQ-1 已关闭） |
+| U6 第 3 项、D13 | FR-04、FR-07，第 6 节，第 8 节，R-12，第 11.2 节（OQ-5 已关闭） |
 | vps-hardening 需求第 7.2 节 | 第 2.2 节继承的约定，FR-01，FR-05，FR-06 |
