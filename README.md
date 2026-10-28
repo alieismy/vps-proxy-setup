@@ -19,7 +19,7 @@ Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example.
 1. 更新系统、安装基础工具并重启；
 2. 加固并确认，这时 UFW 只放行 22/tcp；
 3. 调优：应用 → 重启 → 验证；
-4. 安装并配置 3X-UI（本仓库），再用 `vps-hardening ports` 开放它的端口并确认；
+4. 安装并配置 3X-UI（本仓库）；订阅证书配置完成之后，再用 `vps-hardening ports` 开放它的端口并确认（需求 FR-01、FR-06）；
 5. 调优仓库的严格验证；
 6. 重启后复核。
 
