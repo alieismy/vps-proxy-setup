@@ -1,10 +1,10 @@
 # vps-proxy-setup
 
-Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.2 draft under review (v1.1 approved); solution design not started; nothing to install yet.**
+Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.2 approved; solution design not started; nothing to install yet.**
 
 在已经用 [vps-hardening](https://github.com/alieismy/vps-hardening) 加固的 Debian/Ubuntu VPS 上搭建代理服务，以 3X-UI 为例。
 
-**当前状态：[需求规格说明](docs/requirements.md) v1.2 草案待评审（v1.1 已批准），方案设计还没有开始；还没有可用的脚本或发行版。**
+**当前状态：[需求规格说明](docs/requirements.md) v1.2 已批准，方案设计还没有开始；还没有可用的脚本或发行版。**
 
 ## 与另外两个仓库的关系
 
@@ -36,7 +36,7 @@ Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example.
 
 ## 下一步
 
-v1.2 草案（需求 U10、D18、D19）在 v1.1 的基础上做两件事：按研究结论处理订阅与节点同址削弱伪装的问题（只定原则——节点优先用纯 IP、不挂证书、地址形式在方案设计中确定，订阅不与节点共用同一公网 IP，重开 OQ-2，机制留到方案设计），并按 CodeRabbit 对 v1.1 的三条意见修改（第 1 节范围、第 11.5 节和 FR-02 默认排除共享 CDN 的 target、FR-02 验收补用例），待评审。需求规格说明 v1.1 已批准：v1.0 的内容与 v0.4 草案相同（需求 U8、D16），v1.1 按 CodeRabbit 的意见修改了三处（需求 U9、D17）。v0.3 按需求 U6 决定了全部待决事项（v0.2 的其余内容已无异议）：
+v1.2（需求 U10、D18、D19、D20）在 v1.1 的基础上做两件事：按研究结论处理订阅与节点同址削弱伪装的问题（只定原则——节点优先用纯 IP、不挂证书、地址形式在方案设计中确定，订阅不与节点共用同一公网 IP，重开 OQ-2，机制留到方案设计），并按 CodeRabbit 对 v1.1 的三条意见修改（第 1 节范围、第 11.5 节和 FR-02 默认排除共享 CDN 的 target、FR-02 验收补用例），已批准。需求规格说明 v1.1 已批准：v1.0 的内容与 v0.4 草案相同（需求 U8、D16），v1.1 按 CodeRabbit 的意见修改了三处（需求 U9、D17）。v0.3 按需求 U6 决定了全部待决事项（v0.2 的其余内容已无异议）：
 
 - 3X-UI 改用 v3.11.0（D10，第 11.3 节）；
 - 先调优、再安装 3X-UI，顺序不变（D11，第 11.4 节）；
