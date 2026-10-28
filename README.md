@@ -1,10 +1,10 @@
 # vps-proxy-setup
 
-Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements stage (draft v0.4 under review); nothing to install yet.**
+Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements approved (v1.0); solution design not started; nothing to install yet.**
 
 在已经用 [vps-hardening](https://github.com/alieismy/vps-hardening) 加固的 Debian/Ubuntu VPS 上搭建代理服务，以 3X-UI 为例。
 
-**当前状态：需求阶段，[需求规格说明](docs/requirements.md) v0.4 草案待评审；还没有可用的脚本或发行版。**
+**当前状态：[需求规格说明](docs/requirements.md) v1.0 已批准，方案设计还没有开始；还没有可用的脚本或发行版。**
 
 ## 与另外两个仓库的关系
 
@@ -36,7 +36,7 @@ Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example.
 
 ## 下一步
 
-评审需求规格说明 v0.4 草案。v0.3 按需求 U6 决定了全部待决事项（v0.2 的其余内容已无异议）：
+需求规格说明 v1.0 已批准（需求 U8、D16），内容与 v0.4 草案相同。v0.3 按需求 U6 决定了全部待决事项（v0.2 的其余内容已无异议）：
 
 - 3X-UI 改用 v3.11.0（D10，第 11.3 节）；
 - 先调优、再安装 3X-UI，顺序不变（D11，第 11.4 节）；
@@ -48,7 +48,7 @@ v0.4 按需求 U7 增加：
 - 入站的备注以国旗开头，例如 `🇺🇸 LA-Reality`（D14）；
 - 伪装目标仍用第三方站点，在部署所用的 VPS 上按标准选择；未认证的连接只能到达伪装目标本身；不改为以自己的域名为目标（D15，第 11.5 节）。
 
-之后是方案设计、验证计划、详细设计和实现。测试沿用 vps-hardening 的方式：CI 虚拟机，再加一台测试 VPS。
+下一步是方案设计，之后是验证计划、详细设计和实现。测试沿用 vps-hardening 的方式：CI 虚拟机，再加一台测试 VPS。
 
 ## 许可证
 
