@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | v0.3 草案：按用户 2026-10-28 的答复（U6），v0.2 的其余内容无异议；3X-UI 改用 v3.11.0（D10）；先调优再安装 3X-UI，顺序不变（D11）；交付形态改为首次部署脚本加只读检查（D12，关闭 OQ-1）；分流规则以 Loyalsoldier/clash-rules 的白名单模式为基础改造，规则集用 MetaCubeX/meta-rules-dat 的 mrs 格式（D13，关闭 OQ-5）。修改第 1～4、6～13 节，新增 FR-12、R-11、R-12 和第 11.2～11.4 节；FR-04、FR-07 中"内置订阅页面已关闭"改为待核实（第 10.1 节）。待用户评审。v0.2 草案：按用户 2026-10-26 的答复（U4）关闭 OQ-2～OQ-4（D6～D8）：订阅主机名首版不开启 Cloudflare 代理；首版不设流量上限和到期时间；分流规则在 3X-UI 中统一配置，规则的内容待定（OQ-5）。修改第 2、3 节，FR-02～FR-05、FR-07、FR-09、FR-11 和第 9～11、13 节。按 CodeRabbit 对拉取请求 #1 的意见：第 10.1 节只保留核实过的事实，客户端内核版本的推断移到 A-4，FR-11 记录客户端显示的内核版本；迁移时订阅主机名和节点地址都要改为指向新机（SC5、FR-02、FR-09）；新增 R-10（证书透明度日志公开订阅主机名）；A-1 改为 vps-hardening 的正式版 `v0.1.1`（D9）。交付形态（OQ-1）仍待用户确认。待用户评审。v0.1 草案：按用户 2026-10-26 对五个需求问题的答复（U2）起草 |
+| 状态 | v0.3 草案：按用户 2026-10-28 的答复（U6），v0.2 的其余内容无异议；3X-UI 改用 v3.11.0（D10）；先调优再安装 3X-UI，顺序不变（D11）；交付形态改为首次部署脚本加只读检查（D12，关闭 OQ-1）；分流规则以 Loyalsoldier/clash-rules 的白名单模式为基础改造，规则集用 MetaCubeX/meta-rules-dat 的 mrs 格式（D13，关闭 OQ-5）。修改第 1～4、6～13 节，新增 FR-12、R-11、R-12 和第 11.2～11.4 节；FR-04、FR-07 中"内置订阅页面已关闭"改为待核实（第 10.1 节）。按 CodeRabbit 的意见：REALITY 的原始链接也带 ML-KEM 的提示，更正 FR-04 和 R-5；FR-02 约束 REALITY 的 fingerprint；FR-12 先做只读预检，并限制秘密文件的属主和权限；第 11.2 节写明规则文本的来源和许可证。待用户评审。v0.2 草案：按用户 2026-10-26 的答复（U4）关闭 OQ-2～OQ-4（D6～D8）：订阅主机名首版不开启 Cloudflare 代理；首版不设流量上限和到期时间；分流规则在 3X-UI 中统一配置，规则的内容待定（OQ-5）。修改第 2、3 节，FR-02～FR-05、FR-07、FR-09、FR-11 和第 9～11、13 节。按 CodeRabbit 对拉取请求 #1 的意见：第 10.1 节只保留核实过的事实，客户端内核版本的推断移到 A-4，FR-11 记录客户端显示的内核版本；迁移时订阅主机名和节点地址都要改为指向新机（SC5、FR-02、FR-09）；新增 R-10（证书透明度日志公开订阅主机名）；A-1 改为 vps-hardening 的正式版 `v0.1.1`（D9）。交付形态（OQ-1）仍待用户确认。待用户评审。v0.1 草案：按用户 2026-10-26 对五个需求问题的答复（U2）起草 |
 | 日期 | 2026-10-28（v0.2 为 2026-10-27，v0.1 为 2026-10-26） |
 | 上游依据 | 第 2 节的用户原话；[vps-hardening 需求规格说明](https://github.com/alieismy/vps-hardening/blob/master/docs/requirements.md) v1.10 第 7.2 节（已批准）中与本仓库的约定 |
 | 下游 | 方案设计、验证计划、详细设计（都还没有开始） |
@@ -104,10 +104,12 @@ U1～U5 是在 vps-hardening 的对话中给出的，也记录在它的需求第
 
 - 只有一个入站：VLESS，443/tcp，安全层为 REALITY。传输方式和 flow 在方案设计中确定。
 - REALITY 的密钥对和 shortId 在 VPS 上生成，私钥只保存在 3X-UI 的数据库中。
+- REALITY 的 fingerprint 选用在 Mihomo 中提供 ML-KEM 的值，或者不设置（3X-UI 在 Mihomo 配置中写入 `chrome`）。启用 `support-x25519mlkem768` 不能改变旧的 fingerprint（第 10.1 节）。取值在方案设计中核实。
 - 伪装目标（target 和 serverNames）选用第三方站点，选择标准和核实方法在方案设计中确定。
 - 订阅中的节点地址必须直接到达 VPS：可以是 IP，也可以是在 Cloudflare 上不开启代理（DNS only）的主机名，不能是开启代理的主机名，因为 REALITY 不能经 Cloudflare 代理。3X-UI 在入站没有指定分享地址时，用请求订阅时的主机名作为节点地址（第 10.1 节），所以必须显式设置。用 IP 时，迁移之后要在面板中改为新机的地址（FR-09）；用主机名时只需改 DNS 记录。选哪一种在方案设计中确定。
 
 验收：
+- 生成的 Mihomo 配置中，`client-fingerprint` 是方案设计选定的值；
 - 开启 ML-KEM 的 Mihomo 客户端，经订阅中的节点访问测试地址成功；
 - 不开启 ML-KEM 时握手失败（按上游的行为，作为负面用例）；
 - 节点地址解析到 VPS 的公网地址。
@@ -130,7 +132,7 @@ U1～U5 是在 vps-hardening 的对话中给出的，也记录在它的需求第
 
 - 订阅服务在 2096/tcp 上只以 HTTPS 提供，证书覆盖订阅主机名。设置 `subDomain`，只应答这个主机名。订阅主机名在 Cloudflare 上不开启代理（D6）。
 - 启用 Mihomo 格式（`subClashEnable`）。发给使用者的是 Mihomo 格式的地址（`/mihomo/<订阅 ID>` 或 `subClashPath`）。v3.11.0 生成的 Mihomo 配置会为 REALITY 写入 `support-x25519mlkem768: true`，与 v3.10.2 相同（第 10.1 节）。主机（Hosts）的"Mihomo X25519"开关保持关闭：v3.11.0 起它会去掉这个设置，握手随之失败（R-11）。
-- 原始链接格式在订阅启用时总是可用，链接中没有 ML-KEM 的设置。使用者不应导入原始链接，所以发给使用者的只有 Mihomo 地址（FR-11）。
+- 原始链接格式在订阅启用时总是可用。REALITY 的原始链接带 `support-x25519mlkem768=true`，但要客户端支持这个 URI 扩展才生效（第 10.1 节）；导入原始链接也得不到分流规则。所以发给使用者的只有 Mihomo 地址（FR-11）。
 - JSON 格式保持关闭（默认值）。v3.11.0 对原始链接路径上的浏览器请求（`Accept: text/html` 或 `?html=1`）返回信息页面（第 10.1 节）；它能否关闭、是否需要关闭，在方案设计中核实。
 - 订阅路径用 3X-UI 初始化时生成的随机值。
 - 保留 `Subscription-Userinfo` 等响应头，客户端据此显示用量和到期时间。
@@ -212,17 +214,20 @@ U1～U5 是在 vps-hardening 的对话中给出的，也记录在它的需求第
 
 ### FR-12 首次部署脚本（P0）
 
-- 在 VPS 上以 root 执行：按 FR-01 安装 3X-UI，按 FR-05 安装固定版本的 acme.sh 并签发证书，再经回环地址上的 3X-UI API 写入入站（FR-02）、使用者（FR-03）、订阅设置和分流规则（FR-04）。
-- 只用于全新安装：3X-UI 中已有入站或使用者，或者订阅设置不是默认值时，拒绝写入，不改动任何设置。所以它不会改动正在使用的配置，也不提供重复执行时的合并。
+- 在 VPS 上以 root 执行：先做只读预检，再按 FR-01 安装 3X-UI，按 FR-05 安装固定版本的 acme.sh 并签发证书，然后经回环地址上的 3X-UI API 写入入站（FR-02）、使用者（FR-03）、订阅设置和分流规则（FR-04）。
+- 只用于全新安装。预检在任何改动之前执行：主机上已经安装 3X-UI，或者已有它的数据库时停止，不改动主机。写入设置之前再核对一次：已有入站或使用者，或者订阅设置不是默认值时拒绝写入。所以它不会改动正在使用的配置，也不提供重复执行时的合并。
+- 迁移时只执行预检、安装和签发证书，不写入设置，之后恢复数据库（FR-09）。
 - 3X-UI 的版本不是脚本所针对的版本时拒绝执行（D10）。
-- 输入（第 6 节）从文件或交互读取；Token 等秘密不出现在命令行参数、输出和日志中。
+- 输入（第 6 节）从文件或交互读取；Token 等秘密不出现在命令行参数、输出和日志中。从文件读取秘密时，文件须属于 root、权限为 0600，否则拒绝；导入之后删除这份文件，Token 按 FR-05 保存。
 - 生成的秘密只写入 3X-UI 的数据库，以及一份只有 root 可读的文件（面板凭据和每个人的订阅地址）。管理员取走之后删除这份文件。
 - 写入失败时停止并报告。这时还没有使用者，恢复方式以卸载 3X-UI 后重新执行为基线，在方案设计中确定；不提供自动回滚。
 - 不执行 FR-06。
 
 验收：
 - 在虚拟机中从新机执行之后，FR-07 的检查全部通过；
-- 对已有配置的 3X-UI 执行时拒绝，数据库不变；
+- 对已安装 3X-UI 的主机执行时，在任何改动之前停止，主机状态不变；
+- 写入之前的核对发现已有配置时拒绝写入，数据库不变（注入测试）；
+- 秘密文件的属主或权限不符时拒绝；
 - 输出、日志和归档中没有秘密（NFR-01）。
 
 ## 5. 非功能需求
@@ -287,7 +292,7 @@ U1～U5 是在 vps-hardening 的对话中给出的，也记录在它的需求第
 |---|---|
 | v3.10.2 的订阅有三种格式，按路径区分：原始链接（`subPath`，订阅启用时总是可用）、JSON（`subJsonEnable`）、Clash/Mihomo（`subClashEnable`，另有 `/mihomo/` 别名）。Mihomo 格式是完整的配置文件。v3.11.0 的文档相同，另列出只给 Clash for Windows 用的 `/clash-legacy/`；对原始链接路径带 `Accept: text/html` 或 `?html=1` 的请求返回可读的信息页面 | 3X-UI v3.10.2 和 v3.11.0 的 `docs/content/docs/en/config/subscription.mdx` |
 | 默认值：订阅服务启用，监听所有地址，端口 2096，没有证书时以 HTTP 提供；Mihomo 格式和 JSON 格式关闭；订阅路径和 Mihomo 路径在初始化时随机生成。v3.11.0 相同 | v3.10.2 和 v3.11.0 的 `internal/web/service/setting.go` |
-| Mihomo 配置中，REALITY 节点带 `support-x25519mlkem768: true`（源码注释：Xray 26.9.8 起拒绝没有 ML-KEM 密钥交换的 REALITY 握手）。v3.11.0 相同；v3.11.0 起主机的"Mihomo X25519"开关生效，打开时写入 `false` | v3.10.2 的 `internal/sub/clash_service.go`；v3.11.0 的 `docs/content/docs/en/config/reality.mdx`，3X-UI PR #6803 |
+| Mihomo 配置中，REALITY 节点带 `support-x25519mlkem768: true`（源码注释：Xray 26.9.8 起拒绝没有 ML-KEM 密钥交换的 REALITY 握手）。v3.11.0 相同；v3.11.0 起主机的"Mihomo X25519"开关生效，打开时写入 `false`。`client-fingerprint` 在入站没有设置 fingerprint 时为 `chrome`，设置了则沿用；文档说明启用这个选项不能改变旧的 fingerprint，要选用提供 ML-KEM 的值（例如 Mihomo 的 uTLS v1.8.7 中的 `chrome`）。REALITY 的原始 `vless://` 链接带 `support-x25519mlkem768=true`（v3.10.2 和 v3.11.0），支持这个 URI 扩展的客户端导入时生效 | v3.10.2 和 v3.11.0 的 `internal/sub/clash_service.go`、`internal/sub/service.go`；v3.11.0 的 `docs/content/docs/en/config/reality.mdx`，3X-UI PR #6803 |
 | 默认的 Mihomo 配置只有一个 `PROXY` 组和 `MATCH,PROXY` 规则。`subClashRules` 可以是本地的 YAML（规则列表，或者带 `rules`、`rule-providers` 等键的映射），也可以是远程地址；自定义规则中有 `MATCH` 时替换默认规则，否则放在默认规则之前。远程地址只取 `proxy-groups`、`rule-providers` 和 `rules`（v3.11.0 起可选再取 `dns`、`sniffer`），缓存 10 分钟 | v3.11.0 的 `internal/sub/clash_service.go`（`mergeClashRulesYAML`、`mergeRemoteClashRules`、`mergeClashRules`）和 `remote_routing.go`；v3.10.2 有同名的函数 |
 | 节点地址的取值顺序：入站指定的分享地址、节点地址、入站的监听地址、配置的公开主机名，最后是请求订阅时的主机名。v3.11.0 相同（`ShareAddrStrategy` 为 `custom` 时分享地址优先） | v3.10.2 和 v3.11.0 的 `internal/sub/service.go`（`resolveInboundAddress`） |
 | 菜单中的 Cloudflare 证书：可以用 API Token 或 Global API Key；acme.sh 没有安装时执行 `curl -s https://get.acme.sh \| sh`；签发主域名加通配符；默认续期后执行 `x-ui restart`；开启 acme.sh 的 `--auto-upgrade`；只提示把证书用于面板，不设置订阅服务。v3.11.0 的这些函数相同 | v3.10.2 的 `x-ui.sh`（`ssl_cert_issue_CF`、`install_acme`），文件摘要与 vps-hardening 需求第 10.1 节记录的相同；v3.11.0 的 `x-ui.sh`（见下文的比较） |
@@ -319,7 +324,7 @@ U1～U5 是在 vps-hardening 的对话中给出的，也记录在它的需求第
 | R-2 | VPS 被攻破，Cloudflare API Token 泄露 | 攻击者能修改这个 Zone 的 DNS 记录 | Token 只限一个 Zone、只给签发所需的权限；可以在 Cloudflare 上随时撤销 |
 | R-3 | acme.sh 自动升级 | 以 root 运行未经固定的上游代码 | 固定版本，不开启自动升级（FR-05） |
 | R-4 | 客户端内核太旧 | REALITY 握手失败 | 写明最低版本（FR-11）；排查时先核对客户端版本 |
-| R-5 | 使用者导入了原始链接 | 链接中没有 ML-KEM 的设置，连接失败 | 只发 Mihomo 地址（FR-04、FR-11） |
+| R-5 | 使用者导入了原始链接 | 得不到分流规则；客户端不支持 `support-x25519mlkem768` 这个 URI 扩展时握手失败 | 只发 Mihomo 地址（FR-04、FR-11） |
 | R-6 | 节点地址指向开启了 Cloudflare 代理的主机名 | 连接失败 | 显式设置节点地址，检查核对它的解析结果（FR-02、FR-07） |
 | R-7 | 3X-UI 升级后行为或数据格式变化 | 检查失效，或者升级后的默认值与本文不符 | 固定版本；先评估再升级；版本不符时检查报告不符合（FR-07、FR-10） |
 | R-8 | 订阅服务在证书配置之前以 HTTP 监听所有地址 | 端口一旦开放，订阅内容会以明文传输 | 证书配置完成之前不开放 2096/tcp（FR-01、FR-06） |
@@ -411,7 +416,7 @@ U1～U5 是在 vps-hardening 的对话中给出的，也记录在它的需求第
 2. **去掉与通用分流无关的部分**：`applications`（按进程名匹配，只对桌面客户端有效）、两条面板网址的 `DOMAIN` 规则、`reject`（广告拦截：误拦时排查成本高，首版不做，第 8 节）。Apple、微软等在国内有节点的服务是否单独直连，在详细设计中按规则集的内容确定。
 3. **规则集经代理下载**（`proxy: PROXY`，更新间隔 86400 秒）：中国大陆常常无法直接访问 `raw.githubusercontent.com`（推断；Loyalsoldier 的 README 也提示了这种情况）。节点不可用时规则集无法首次下载，这时本来也无法代理；已下载的规则集保留在客户端（推断，在测试中核实）。
 4. **IP 规则**：私有地址加 `no-resolve`。国内 IP 规则是否加 `no-resolve`，在详细设计中权衡：加上时，没有列入域名规则的国内网站会走代理；不加时，这些域名会先在本地解析，查询发给本地的 DNS。
-5. **规则文本保存在本仓库**，由部署脚本以本地 YAML 写入 `subClashRules`，不用远程地址：不依赖面板访问 GitHub，规则的版本随仓库发布；检查核对它与仓库中的文本一致（FR-07）。
+5. **规则文本保存在本仓库**，由部署脚本以本地 YAML 写入 `subClashRules`，不用远程地址：不依赖面板访问 GitHub，规则的版本随仓库发布；检查核对它与仓库中的文本一致（FR-07）。仓库中只保存为本仓库编写的规则文本（规则集的名称、地址和规则的顺序），按本仓库的 MIT 许可证发布，不复制上游的规则数据和文本；规则集的数据由客户端从 MetaCubeX/meta-rules-dat 下载，不存入本仓库，仍按它自己的许可证（GPL-3.0）。规则的结构参照 Loyalsoldier/clash-rules 的白名单模式，在使用说明中注明出处。
 6. **沿用 3X-UI 生成的 `PROXY` 组**，规则以 `MATCH,PROXY` 结尾：自定义规则中有 `MATCH` 时，3X-UI 用它替换默认规则（第 10.1 节）。
 7. **规则集跟随 `meta` 分支的最新构建**，不固定提交（R-12）。
 
