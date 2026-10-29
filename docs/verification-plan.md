@@ -205,7 +205,7 @@ FR-02 的负面用例在外连边界上观测，三处证据都要有：转发�
 | 编号 | 需求 | 场景 | 通过判据 | 里程碑 |
 |---|---|---|---|---|
 | VT-70 | FR-07 | 部署之后执行 `check` | M2（还没有第 8 步）：cloudflared 和 Tunnel 的各项 FAIL，其余全部 PASS；M3：只有 cloudflared 就绪和 Tunnel 路由两项 FAIL（VT-53）。输出的分级和退出码与 vps-hardening 的 `verify` 一致 | M2、M3 |
-| VT-71 | FR-07 | 每个检查项各注入一种偏差，例如：版本不符；面板监听 0.0.0.0；启用 `3x-ipl`；多一个入站；`serverNames` 多一项；转发入站改为目的地址写 target 主机名并开 `routeOnly`；`destOverride` 加上 `http`；路由规则换序或删去回国流量规则；分享地址改为主机名；某人的 flow 不对；订阅设置改值；规则文本改一个字；订阅监听 0.0.0.0；cloudflared 摘要不符或服务停止；启用更新定时器；令牌文件改为 0644；放置 acme.sh；`vps-hardening verify` 失败 | 每种偏差都被发现，只有对应的项 FAIL。Tunnel 路由的偏差在测试 VPS 上注入（第 5 节） | M1（不依赖部署的项）、M2、M3（cloudflared 的项） |
+| VT-71 | FR-07 | 每个检查项各注入一种偏差，例如：版本不符；面板监听 0.0.0.0；启用 `3x-ipl`；多一个入站；`serverNames` 多一项；转发入站改为目的地址写 target 主机名并开 `routeOnly`；`destOverride` 加上 `http`；路由规则换序或删去回国流量规则；分享地址改为主机名；某人的 flow 不对；订阅设置改值；规则文本改一个字；订阅监听 0.0.0.0；cloudflared 摘要不符或服务停止；启用更新定时器；令牌文件改为 0644；放置 acme.sh；`vps-hardening verify` 失败 | 每种偏差都被发现：与同一阶段未注入时的基线（M1 为本节末尾说明的状态，M2、M3 为 VT-70 的结果）相比，只有对应的项由 PASS 变为 FAIL，基线中已经 FAIL 的项不计入。注入所针对的项在基线中必须是 PASS，所以基线中 FAIL 的项（例如 M3 的 cloudflared 就绪）不在虚拟机中注入。Tunnel 路由的偏差在测试 VPS 上注入（第 5 节） | M1（不依赖部署的项）、M2、M3（cloudflared 的项） |
 | VT-72 | FR-07、NFR-07 | x-ui 运行和停止两种状态下各执行一次 `check`；执行前在数据库目录中放一个以 `.x-ui-backup-` 开头的目录 | 前后状态摘要一致：数据库逐表摘要、表结构、文件列表和权限不变；那个目录仍在（说明没有调用 `x-ui setting`）。`-shm` 中的读标记是 SQLite 读取本身的行为，不算改动 | M1 |
 | VT-73 | FR-07 | 把程序文件换成报告其他版本的替身 | 版本项 FAIL，依赖数据格式的检查报告为跳过 | M1 |
 | VT-74 | FR-07、NFR-01 | 扫描 `check` 的输出 | 没有第 3.4 节清单中的任何值 | M1 |
