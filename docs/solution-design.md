@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | v1.0 草案，待评审：按需求 v1.3 起草，确定实现形态、写入方式、REALITY 的转发限制、订阅与 Tunnel、只读检查、迁移与升级，以及需求中留给方案设计的各项取值 |
+| 状态 | v1.0 草案，待评审：按需求 v1.3 起草，确定实现形态、写入方式、REALITY 的转发限制、订阅与 Tunnel、只读检查、迁移与升级，以及需求中留给方案设计的各项取值。按 CodeRabbit 对草案的意见，转发入站的目的地址改为占位的回环 IP，使不带 SNI 的连接不被转发（第 4.4、7.4 节） |
 | 日期 | 2026-10-29 |
 | 上游 | [需求规格说明 v1.3](requirements.md)（已批准）；[vps-hardening 方案设计](https://github.com/alieismy/vps-hardening/blob/master/docs/solution-design.md)的形态和惯例 |
 | 下游 | 验证计划、详细设计、实现（都还没有开始） |
 | 深度 | 高层设计：确定组件、边界、流程和关键机制，不含代码和操作手册 |
 
-**证据状态。** 本文只是设计，仓库里还没有实现，也没有任何运行证据。标"已核实"的，是 2026-10-29 对照 3X-UI v3.11.0、cloudflared 2026.10.5、vps-hardening `v0.1.1` 的源码或文档核实的结果，出处见第 13 节和需求第 10.1 节；标"推断"的，要在虚拟机测试或测试 VPS 上证实。
+**证据状态。** 本文只是设计，仓库里还没有实现，也没有任何运行证据。标"已核实"的，是 2026-10-29 对照 3X-UI v3.11.0（及其自带的 Xray v26.10.21）、cloudflared 2026.10.5、vps-hardening `v0.1.1` 的源码或文档核实的结果，出处见第 13 节和需求第 10.1 节；标"推断"的，要在虚拟机测试或测试 VPS 上证实。
 
 ## 1. 背景与目标
 
@@ -83,11 +83,13 @@ token 的来源：v3.11.0 的 `install.sh` 在全新安装时生成一个 admin 
 
 | 候选 | 说明 | 评价 |
 |---|---|---|
-| A. Xray 自己的本机转发入站（推荐） | REALITY 的 target 指向回环地址上的一个 `tunnel` 入站（即 dokodemo-door），它开启 TLS 嗅探（只用于路由），转发到 target 的 443。路由规则：这个入站嗅探到的 SNI 等于 target 主机名时走 `direct`，其余（包括没有 SNI 的）走 `blocked` | 不增加组件，规则写在 3X-UI 的 Xray 配置模板中，面板中可以看到。与用户参考方案"经回环地址的转发入站按 SNI 分流"一致 |
+| A. Xray 自己的本机转发入站（推荐） | REALITY 的 target 指向回环地址上的一个 `tunnel` 入站（即 dokodemo-door）。它的目的地址是占位的回环 IP、端口 443，开启 TLS 嗅探，用嗅探到的 SNI 改写目的地址（不用 `routeOnly`）。路由规则：这个入站的目的域名等于 target 主机名时走 `direct`，其余（别的 SNI；没有 SNI 或不是 TLS、目的地址仍是占位 IP 的）走 `blocked` | 不增加组件，规则写在 3X-UI 的 Xray 配置模板中，面板中可以看到。与用户参考方案"经回环地址的转发入站按 SNI 分流"一致 |
 | B. nginx stream 的 `ssl_preread` | 在回环地址上按 SNI 转发 | 多一个常驻组件和一套配置，功能与 A 相同 |
 | C. 直接指向 target，只靠回落限速 | 3X-UI 的默认做法 | FR-02 不允许：限速不能代替 SNI 白名单 |
 
-A 的机制：REALITY 对 SNI 不在 `serverNames` 中、或者认证失败的连接，原样转发到 target（需求第 10.1 节）。target 是本机转发入站时，只有 SNI 等于 target 的连接被继续转发；SNI 不在白名单中、不带 SNI 的 ClientHello 都在本机被丢弃，不会离开 VPS。这正是 FR-02 验收要在外连边界观测的行为。Xray 嗅探 TLS SNI 并按 `domain` 规则路由是它的常规功能（推断，置信度中高，在 M2 的虚拟机测试中按 FR-02 的三个负面用例证实）。
+A 的机制：REALITY 对 SNI 不在 `serverNames` 中、或者认证失败的连接，原样转发到 target（需求第 10.1 节）。target 是本机转发入站时，只有 SNI 等于 target 的连接被继续转发；SNI 不在白名单中、不带 SNI 的 ClientHello 都在本机被丢弃，不会离开 VPS。这正是 FR-02 验收要在外连边界观测的行为。
+
+转发入站的目的地址不能写成 target 的主机名、再用 `routeOnly` 只按嗅探结果路由：不带 SNI 的 ClientHello 嗅探失败，路由用的仍是入站配置的目的地址，其中的域名就是 target，`direct` 规则会匹配，连接被转发到 target，不符合 FR-02 的验收。所以目的地址用占位的回环 IP：只有嗅探到 SNI、目的地址被改写之后，连接才有域名可以匹配；没有 SNI 的连接目的地址仍是 IP，落到 `blocked`。嗅探、改写和取路由域名的这段逻辑已对照 Xray v26.10.21 的源码核实（第 13 节）；实际效果在 M2 的虚拟机测试中按 FR-02 的三个负面用例证实。
 
 ### 4.5 Tunnel 的路由管理与 cloudflared 的安装（FR-05）
 
@@ -153,7 +155,7 @@ A 的服务单元以 systemd 的动态用户运行 cloudflared，令牌文件仍
 
 **置信度：中。** 3X-UI v3.11.0 和 cloudflared 2026.10.5 的相关行为已经对照源码核实。以下几点还没有运行证据，要在 M2、M3 中证实：
 
-- 转发入站按嗅探到的 SNI 路由，三个负面用例（别的 SNI、没有 SNI、异权威探测）都得不到其他站点的内容；
+- 转发入站按嗅探到的 SNI 改写目的地址并路由：别的 SNI、没有 SNI 的连接在外连侧没有转发，异权威探测得不到其他站点的内容；
 - 经 API 写入的设置在面板和订阅输出中与预期一致，包括节点名称和节点地址；
 - cloudflared 以动态用户运行时能正常连接；
 - 经 Cloudflare 拉取订阅时不被挑战拦住。
@@ -230,10 +232,12 @@ REALITY 入站：
 
 节点地址用 IPv4：VPS 有 IPv6 时 443 仍在两种地址上监听，订阅只给 IPv4 地址。多数使用者的网络是 IPv4（推断）；以后需要时可以在 3X-UI 的主机（Hosts）中加一个 IPv6 的地址。
 
-转发入站：协议 `tunnel`，监听 127.0.0.1，目标是 target 的主机名和 443；嗅探 TLS，只用于路由（`routeOnly`）。Xray 配置模板中的路由规则放在最前面：
+转发入站：协议 `tunnel`，监听 127.0.0.1；目的地址是占位的 `127.0.0.1`，端口 443；嗅探 TLS，用嗅探到的域名改写目的地址（`destOverride` 含 `tls`，不设 `routeOnly`），端口不变（第 4.4 节）。Xray 配置模板中的路由规则放在最前面：
 
-1. 来自转发入站、域名完全等于 target 主机名 → `direct`；
-2. 来自转发入站的其余连接 → `blocked`。
+1. 来自转发入站、目的域名完全等于 target 主机名 → `direct`。只有嗅探到 SNI、目的地址被改写的连接才有域名；
+2. 来自转发入站的其余连接 → `blocked`：别的 SNI，以及没有 SNI 或不是 TLS、目的地址仍是占位 IP 的连接。
+
+占位地址在回环网段，规则 2 万一缺失或顺序出错，模板中原有的私有地址 → `blocked` 也会挡住它。M2 中不带 SNI 的用例要确认转发入站的外连侧没有连接（落到规则 2），不只看客户端拿不到内容。
 
 模板中原有的规则保留：私有地址 → `blocked`，BitTorrent → `blocked`（v3.11.0 的默认模板，已核实）。参考方案中的"屏蔽回国流量"（REALITY README 的配置加分项）建议加入：`geoip:cn` → `blocked`。客户端的规则已经让国内流量直连（D13），这条规则只影响漏到代理上的国内流量。是否加入列为 OD-2。
 
@@ -393,6 +397,7 @@ Tunnel：
 | API token 分 admin、monitor、node-sync、node-admin 范围；只存 SHA-256 摘要，明文只在创建时返回一次；可以经 `/panel/api/setting/apiTokens/delete/{id}` 删除 | v3.11.0 `docs/content/docs/en/reference/api/api-tokens.mdx`、`frontend/public/openapi.json` |
 | 写入接口：`/panel/api/inbounds/add`、`/panel/api/clients/add`、`/panel/api/setting/update`、`/panel/api/xray/update`、`/panel/api/setting/restartPanel`；另有 `/panel/api/xray/routeTest` | v3.11.0 `frontend/public/openapi.json` |
 | 入站有 `shareAddrStrategy`（`node`、`listen`、`custom`）和 `shareAddr`；节点地址依次取 `custom` 时的分享地址、节点地址、监听地址、`subDomain`（再是面板域名），最后是请求的主机名 | v3.11.0 `internal/database/model/model.go`，`internal/sub/service.go`（`resolveInboundAddress`、`configuredPublicHost`） |
+| Xray 的 TLS 嗅探在 ClientHello 不带 SNI 时返回错误，不改写目的地址；嗅探到域名且协议在 `destOverride` 中时改写目的地址（只改地址，端口不变），设了 `routeOnly` 时只改写路由用的目的地址；路由规则取域名时先看路由用的目的地址，再看实际的目的地址，是 IP 时没有域名 | Xray-core v26.10.21 `common/protocol/tls/sniff.go`（`ReadClientHello`）、`app/dispatcher/default.go`（`shouldOverride`、`Dispatch`）、`features/routing/session/context.go`（`GetTargetDomain`） |
 | 入站协议中 dokodemo-door 叫 `tunnel`；默认 Xray 模板的出站是 `direct`（freedom）和 `blocked`（blackhole），路由规则是 api、私有地址 → `blocked`、BitTorrent → `blocked` | v3.11.0 `internal/database/model/model.go`、`internal/web/service/config.json` |
 | Mihomo 配置中的 VLESS 节点带客户端的 `flow`，`client-fingerprint` 取入站的 fingerprint | v3.11.0 `internal/sub/clash_service.go` |
 | `remarkTemplate` 默认是 `{{INBOUND}}-{{EMAIL}}\|📊{{TRAFFIC_LEFT}}\|⏳{{DAYS_LEFT}}D`；`subInfoNodeEnable` 默认关闭，打开时在节点前插入指向 127.0.0.1:1080 的占位节点 | v3.11.0 `internal/web/service/setting.go`，`internal/sub/clash_service.go` |
