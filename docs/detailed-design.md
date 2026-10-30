@@ -2,31 +2,32 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | v0.1 草案：覆盖里程碑 M1，即整体的命令契约、部署输入、预检、`check` 的全部检查项、`target-check`、安装脚本、模块划分、实现约束和 M1 的测试框架。`deploy` 预检之后的步骤、规则文本、交给管理员的文件和 cloudflared 的服务单元，在 M2、M3 的版本中增补。按 CodeRabbit 对草案的意见，写明 `sub.paths` 不能证明订阅路径是随机生成的（第 4.2、11 节）。待用户评审 |
+| 状态 | v0.2 草案，待用户评审。保留 v0.1 的 M1 设计，修正命令、检查和注入契约；增加 API 与凭据、部署与恢复顺序、REALITY SNI 边界、Tunnel 服务和测试接缝（第 15～19 节）。各节按 M1～M5 分阶段实现和验证，不把后续设计或真实环境验收设为 M1 的统一前置条件。没有批准、实现或运行验收记录 |
 | 日期 | 2026-10-30 |
 | 上游 | [需求规格说明 v1.3](requirements.md)（已批准）、[方案设计 v1.0](solution-design.md)（已批准）、[验证计划 v1.0](verification-plan.md)（已批准）；[vps-hardening 详细设计](https://github.com/alieismy/vps-hardening/blob/master/docs/detailed-design.md)的形态和惯例 |
 | 下游 | 实现和测试（从 M1 开始） |
-| 深度 | 命令契约、检查项目录、文件格式、模块划分、实现约束和测试框架；不重复上游已有的决策理由，不含代码和操作手册 |
+| 深度 | 命令和 API 契约、数据来源、凭据与文件生命周期、写入及恢复顺序、服务边界、检查和测试接缝；不重复上游决策理由，不含实现代码和操作手册 |
 
 **证据状态。** 本文只是设计，仓库中还没有实现，也没有运行证据。标"已核实"的，是 2026-10-30 对照上游源码或软件包数据核实的结果，本文新核实的见第 14 节；标"推断"的，要在指定的里程碑中证实，列在第 12 节。
 
 ## 1. 范围
 
-v0.1 覆盖 M1（方案设计第 10 节，验证计划第 7 节）：
+v0.2 按方案设计第 10 节、验证计划第 7 节分阶段定义。以下内容沿用并修订 v0.1 的 M1 范围：
 
 - 整体的命令契约（第 2 节）：子命令、退出码、输出格式、部署输入的格式和校验规则、本工具在 VPS 上的文件；
 - `deploy`：只到预检为止（第 2.5、3 节）；
-- `check`：第 4 节的全部检查项。依赖部署结果和 cloudflared 的检查项也在 M1 中实现，但只能在 M2、M3 中对部署之后的主机验证（验证计划第 7 节）；那时发现要修改的，随 M2、M3 的版本修改本文；
+- `check`：第 4 节的检查目录和只读读取方式。M1 建立检查骨架并验证不依赖部署的项；依赖规则文本、完整入站或 Tunnel 的判据与注入在 M2、M3 补齐。后续项存在于目录中不表示已有运行验证；
 - `target-check`（第 2.7、5 节）；
 - 安装脚本（第 2.9 节）。发布和从公开地址的回验在 M4（VT-98）；
 - 模块划分、实现约束和 M1 的测试框架（第 7～9 节）。
 
-不在 v0.1 中：
+本版增加的跨阶段契约：
 
-- `deploy` 的第 2～9 步（方案设计第 7.3 节，M2、M3），`--migrate` 在预检之后的步骤（M4）；
-- 规则文本（M2）、交给管理员的文件的内容（M2）、cloudflared 服务单元的内容（M3）；
-- 上游交给详细设计、属于 M2 的三项：规则集的两处取舍（需求第 11.2 节）、VT-12 的注入方法、VT-30 所用的路由测试接口（第 12 节 DO-9～DO-11）；
-- 方案设计第 7.5 节交给详细设计的两项 Cloudflare 设置：边缘证书的覆盖范围，对非浏览器客户端的挑战设置。它们属于 M3，在 M3 的版本中按 Cloudflare 的现行文档核实（第 12 节 DO-6）。
+- 第 15、16 节：M2 的 API、凭据和写入契约；M3 的 Tunnel 接入与 M4 的恢复、迁移、回退顺序。`--migrate` 的命令分支按方案设计列入 M2，涉及 cloudflared 的部分随 M3，完整迁移演练在 M4；
+- 第 17、18 节：REALITY SNI 的配置和观测边界、cloudflared 服务字段与动态用户；
+- 第 19 节：复用现有 VT 用例的测试接缝，限定在隔离测试驱动中，不增加生产故障开关。
+
+规则文本及其取舍（DO-9）、实际平台输出与固定摘要（DO-1～DO-3）、API 和服务运行行为、Cloudflare 账户设置及授权仍按第 12 节处理。DO-7、VO-5、VO-7 未获用户决定。完整使用说明、客户端说明和操作命令不在本文件中，分别随 M4、M5 交付。本文新增细节均为待评审设计，写明接口不等于授权执行接口。
 
 ## 2. 命令契约
 
@@ -51,7 +52,7 @@ v0.1 覆盖 M1（方案设计第 10 节，验证计划第 7 节）：
 
 | 退出码 | 含义 |
 |---|---|
-| 0 | 完成，检查没有不符合项（可以有警告和跳过） |
+| 0 | 命令达到自己的完成条件；检查没有不符合项（允许有警告和有明确原因的跳过） |
 | 1 | 至少一项不符合，或者命令被拒绝 |
 | 2 | 用法或输入错误 |
 | 3 | 内部错误：命令意外失败，由 ERR 陷阱统一转换（第 8 节），避免被误读为"不符合" |
@@ -60,16 +61,22 @@ v0.1 覆盖 M1（方案设计第 10 节，验证计划第 7 节）：
 
 | 命令 | 0 | 1 | 2 |
 |---|---|---|---|
-| `deploy` | M2 起：部署完成，随后的 `check` 全部通过 | 不是 root；平台不符；锁被占用；预检有不符合项；M1 中预检全部通过之后（后续步骤还没有实现，主机未改动）；M2 起还有：管理员没有输入 `yes`，某一步失败 | 未知参数；标准输入不是终端；输入文件不合规；输入值不合法（第 2.4 节） |
+| `deploy` | 完整首次部署完成且最终 `check` 为 0；`--migrate` 仅按第 16.3 节的安装准备条件返回 0，不表示迁移验收完成 | 不是 root；平台不符；锁被占用；预检失败；M1 预检完成但未实现写入；M2 尚未实现 Tunnel；管理员取消；某一步失败或写入结果无法确认；最终检查不符合 | 未知参数；标准输入不是终端；输入文件不合规；输入值不合法（第 2.4 节） |
 | `check` | 没有不符合项 | 不是 root；至少一项不符合，包括数据库读不了（`xui.db`，VT-75） | 带了任何参数 |
-| `target-check` | 没有不符合项 | 不是 root；至少一项不符合，包括解析不到地址 | 缺少主机名；主机名或 `--probe-host` 不合法；未知参数 |
+| `target-check` | 没有不符合项且结果文件已发布 | 不是 root；至少一项不符合，包括解析不到地址；结果文件因权限、空间或 I/O 错误无法发布 | 缺少主机名；主机名或 `--probe-host` 不合法；未知参数 |
 | 安装脚本 | 安装完成，或无需变更 | 拒绝或失败 | 未知参数、缺少取值、`--source-dir` 不是绝对路径 |
 
 数据库读不了时退出码取 1（VT-75 交给本文确定）：这时检查范围内的配置无法确认，按不符合处理；原因写在 `xui.db` 一行中，检查不初始化或修复数据库。
 
+外部请求超时、连接失败、数据库忙或不可读、API 明确拒绝均属预期操作失败，归入 1，不直接落入 ERR 陷阱。3 留给程序不变量破坏或未分类的意外错误。收到 SIGINT、SIGTERM 时，分别以 130、143 退出，清理私有临时文件并释放锁，不自动撤销已完成的部署步骤；SIGKILL 或掉电无法保证清理。测试驱动另记信号中断，不把它解释为部署成功。写请求响应丢失的处理见第 15.3 节。
+
+M2 的阶段完成按 VT-70 的基线判定，工具仍返回 1 并说明 Tunnel 尚未完成；不为测试把 `cfd.* FAIL` 改为 PASS，也不增加生产用的跳过检查参数。完整 `deploy` 返回 0 仍不表示公网端口已开放或已完成客户端验收。
+
 ### 2.3 输出格式
 
 与 vps-hardening 详细设计第 2.3 节相同：每个检查项一行，`[级别] 编号 说明`，编号左对齐占 30 列；级别为 `PASS`、`FAIL`、`WARN`、`SKIP`、`INFO`，只有 `FAIL` 使退出码为 1，`INFO` 不计数；最后一行汇总通过、不符合、警告和跳过的数量。用法错误和内部错误以 `[x]` 开头写到标准错误。
+
+检查行与汇总写标准输出；交互提示、拒绝原因、未完成阶段和内部错误写标准错误。子进程的原始输出不直接透传。失败输出只包含步骤、稳定检查编号、已脱敏原因、是否已改动系统和人工接续位置；不回显请求体、认证头或原始 API 响应。`--help`、`--version` 写标准输出且不要求 root。`check` 说明不含运行时间和耗时，以满足 VT-76；`target-check` 的时间和耗时不受此限制。
 
 输出中不出现以下秘密（FR-07、NFR-01）：UUID、订阅 ID、订阅路径、REALITY 私钥和 shortId、面板用户名和密码、`webBasePath`、API token、Tunnel 的令牌。shortId 不在 FR-07 的清单中，本文同样不输出：它与 UUID 一起构成客户端的连接参数，检查不需要显示它。可以输出的是：主机名、节点地址、端口、使用者代号和数量、版本、摘要不符的文件名、API token 的名称。
 
@@ -98,7 +105,7 @@ v0.1 覆盖 M1（方案设计第 10 节，验证计划第 7 节）：
 
 - 所有输入在主机检查之前校验。不合法时，每个不合法的键输出一行 `[x] 输入 <键>：<原因>`，不回显它的值，以退出码 2 结束，不做主机检查。
 - `--migrate` 的输入文件中有 `remark` 或 `users` 时同样以退出码 2 拒绝：迁移不写设置（FR-09），这两项没有用处，出现说明拿错了文件。
-- 输入文件何时删除（FR-12"导入之后删除"）属于 M2 的契约。M1 中 `deploy` 不删除它。
+- 输入文件的消费与删除见第 16.1 节。M1 只预检；输入错误、预检失败或管理员取消时不删除它。
 
 ### 2.5 `deploy`
 
@@ -112,7 +119,7 @@ M1 的流程：
 6. 预检的其余检查项（第 3 节），有不符合项时退出码 1；
 7. 全部通过时，以 `[x]` 输出"预检通过；之后的步骤在 M2 实现，主机未改动"，退出码 1。
 
-M2 在第 6 步之后加上变更计划和确认：管理员输入 `yes` 才继续，否则以退出码 1 结束、主机不变。这样 VT-01 在 M1 和 M2 中都按"预检通过、主机不变"判定。之后的步骤按方案设计第 7.3 节，契约在 v0.2 中增补。
+M2 在第 6 步之后加上变更计划和确认：管理员输入 `yes` 才继续，否则以退出码 1 结束、主机不变。VT-01 在此处取消以验证预检无副作用，不执行安装。之后的步骤见第 16.1 节，M2、M3 的完成条件分别见第 2.2 节。
 
 ### 2.6 `check`
 
@@ -122,7 +129,8 @@ M2 在第 6 步之后加上变更计划和确认：管理员输入 `yes` 才继�
 
 - **参数。** `<主机名>` 按第 2.4 节 `target` 的规则校验。`--probe-host <主机名>` 是异权威探测请求的 Host，规则相同，不能等于目标；默认是 `vps-proxy-setup-probe.invalid`（RFC 2606 保留的、不会被解析的名称）。默认值只能发现"按 Host 返回别的内容"的服务器；要检查同一网络或同一 CDN 上的某个具体站点，由管理员用这个参数给出（第 5 节）。
 - **网络范围。** 只解析目标主机名，只连接它解析到的地址的 443/tcp。`--probe-host` 只作为 HTTP 的 Host 和 HTTP/2 的 `:authority` 发送，不解析、不连接（需求第 11.5 节第 4 条，VT-80）。
-- **结果文件。** 写入 `/etc/vps-proxy-setup/target-check/<主机名>`（目录不存在时以 0700 创建，文件 0600），先写到同一目录下的临时文件，再改名替换，所以同一个目标只保留最新的一次。内容为键值行 `version=`（工具版本）、`time=`（UTC，ISO 8601）、`target=`、`probe_host=`，然后是与终端输出相同的检查项行和汇总行。预检的 `target.checked` 读取这个文件（第 3 节）。
+- **结果文件。** 写入 `/etc/vps-proxy-setup/target-check/<主机名>`（目录不存在时以 0700 创建，文件 0600），先写到同一目录下的临时文件，再改名替换。内容为键值行 `format=1`、`version=`（工具版本）、`time=`（UTC，ISO 8601）、`target=`、`probe_host=`，之后为第 5 节各检查项、汇总和末行 `result=PASS` 或 `result=FAIL`。完成的失败探测也覆盖旧结果，不能沿用旧 PASS；内部错误或信号中断不发布半成品，保留旧文件并在标准错误明确本次未更新。写文件失败不返回 0。
+- **有效记录。** 文件必须是 root 所有的 0600 普通文件；格式可识别、必需键唯一且齐全、目标与输入一致、时间可解析且不晚于本机当前时间、检查项完整且计数与汇总一致。只有 `result=PASS` 且没有 FAIL 才可供预检使用。缺失、截断、错误类型或未知格式视为没有有效核实结果。WARN 保留供管理员判断，不把它提升为隔离证明。记录只作本机证据，不增加签名或主机身份绑定。
 
 ### 2.8 本工具在 VPS 上的文件和固定的端口
 
@@ -131,7 +139,7 @@ M2 在第 6 步之后加上变更计划和确认：管理员输入 `yes` 才继�
 | 文件 | 写入者 | 读取者 | 内容与生命周期 |
 |---|---|---|---|
 | `target-check/<主机名>` | `target-check` | 预检的 `target.checked`；M2 起写入部署记录 | 第 2.7 节；新的一次覆盖旧的 |
-| `deploy.conf` | `deploy`（M2 起） | `check` 的 `record.consistent` | 部署记录，键值行，按数据解析：`tool_version`、`xui_version`、`cloudflared_version`、`mode`（`deploy` 或 `migrate`）、`deployed_at`、`sub_host`、`node_ip`、`target`、`target_check_time`。部署之后不由本工具修改 |
+| `deploy.conf` | `deploy`（M2 起） | `check` 的 `record.consistent` | 部署记录，键值行，按数据解析：`tool_version`、`xui_version`、`cloudflared_version`、`mode`（`deploy` 或 `migrate`）、`deployed_at`、`sub_host`、`node_ip`、`target`、`target_check_time`。第 16 节规定发布时点；它记录预期配置，不证明整个部署或迁移已完成。部署之后不由本工具修改 |
 | `tunnel-token` | `deploy` 第 8 步（M3） | systemd 经 `LoadCredential` 交给 cloudflared | 只有令牌一行；迁移或怀疑泄露时轮换（方案设计第 7.9 节） |
 | `handoff` | `deploy` 第 7 步（M2） | 管理员 | 交给管理员的文件：面板凭据、`webBasePath`、每人的订阅地址；管理员取走后删除 |
 
@@ -180,7 +188,7 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 | `new-host.state` | 是否部署过 | 存在 `/etc/vps-proxy-setup`，但不是"属于 root、权限 0700、其中只有同样属于 root 且 0700 的 `target-check` 目录，目录中只有普通文件"。只有 `target-check` 的结果时仍算新机 | VT-02 |
 | `ports.free` | 要用的端口 | 443、面板端口和第 2.8 节中 127.0.0.1 上的端口，任何一个已有 TCP 监听（不论地址）。说明中列出被占用的端口 | VT-01 |
 | `tuning.dropin` | 调优的 drop-in | 不判定不符合：`/etc/systemd/system/x-ui.service.d/90-proxy-vps.conf` 不存在时为警告。之后 vps-tuning 的严格验证需要它（NFR-04，README 的执行顺序） | VT-01 |
-| `target.checked` | target 的核实 | 没有这个 target 的 `target-check` 结果（第 2.7 节），或者结果中有 `FAIL` 行。结果早于 7 天时为警告：小站点容易改版或迁走（需求第 11.5 节） | VT-01 |
+| `target.checked` | target 的核实 | 没有第 2.7 节定义的有效 PASS 记录。结果早于 7 天时为警告：小站点容易改版或迁走（需求第 11.5 节）；记录中已有的警告应一并提示 | VT-01 |
 
 `target.checked` 来自 FR-02 的验收"部署记录中有 target 在部署所用的 VPS 上的核实结果"：没有核实过的 target 不进入部署。`--migrate` 同样要求，因为核实要在部署所用的 VPS 上进行。
 
@@ -190,21 +198,34 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 
 **数据库。** 路径固定为 `/etc/x-ui/x-ui.db`。`xui.env` 和 `xui.unit` 确认 3X-UI 没有经环境变量改用别的位置：x-ui 每次启动都读取三个环境文件中第一个存在的那个，其中的 `XUI_DB_FOLDER`、`XUI_BIN_FOLDER` 等会改变数据库和程序的位置（已核实，第 14 节）。
 
-打开方式按 SQLite 对只读打开 WAL 数据库的规定选择：`-wal` 和 `-shm` 都存在时可以只读打开；都不存在时，只读连接要在目录中创建它们，除非以 `immutable` 打开（已核实，第 14 节）。检查不能在 `/etc/x-ui` 中新建文件（VT-72），所以：
+打开方式按 SQLite 对只读 WAL 的规定选择，但 `mode=ro` 和预先检查侧文件并不单独保证不新建文件：目录可写时 SQLite 仍可创建侧文件。下表是候选读取策略，DO-1 在 M1 中核实稳定状态及状态切换；不在 `/etc/x-ui` 中新建或删除文件仍是 VT-72 的门禁，不能以返回 FAIL 抵消已经发生的写入。
 
-| `-wal` 和 `-shm` | `-journal` | 打开方式 |
+| x-ui 状态与 `-wal`、`-shm` | `-journal` | 打开方式 |
 |---|---|---|
-| 都存在（x-ui 在运行） | 不存在 | `file:/etc/x-ui/x-ui.db?mode=ro` |
-| 都不存在（x-ui 已停止） | 不存在 | `file:/etc/x-ui/x-ui.db?mode=ro&immutable=1` |
-| 只有一个 | — | 不读取，`xui.db` 不符合 |
-| — | 存在 | 不读取，`xui.db` 不符合：读取一个热日志的数据库要先回滚，那是写入 |
+| 服务稳定运行，侧文件都存在 | 不存在 | `file:/etc/x-ui/x-ui.db?mode=ro`；侧文件消失的竞态由 DO-1 验证 |
+| 服务已停止、没有并行管理操作，侧文件都不存在 | 不存在 | `file:/etc/x-ui/x-ui.db?mode=ro&immutable=1`；不可变前提及启动竞态由 DO-1 验证 |
+| 只有一个侧文件、服务处于启动/停止过渡，或状态无法确认 | — | 不读取，`xui.db` 不符合，不把侧文件存在与否当作服务状态证明 |
+| 任意 | 存在 | 不读取，`xui.db` 不符合：不尝试恢复可能的热日志 |
 
 - 命令为 `sqlite3 -readonly -safe -batch -bail -init /dev/null <URI> <SQL>`，设 5 秒的忙等待，整体 30 秒超时。`-safe` 禁止写文件的点命令和函数，作为额外的保险。
 - 一次调用、一条语句、一个读事务，输出一个 JSON 文档作为快照，所有库项都在这份快照上判定，不会读到两个时刻的数据。
 - 快照中没有秘密：语句只选需要的列，不用 `SELECT *`；`stream_settings` 去掉 REALITY 私钥之后输出，另加一个"私钥非空"的布尔值；shortId 只输出个数、长度和是否为十六进制；需要用到订阅路径的判定（`sub.uri`、`sub.paths`）在 SQL 中算成布尔值和长度，路径本身不离开 `sqlite3` 进程；使用者只选代号、启用状态、flow 和 `limit_ip`，不选 UUID 和订阅 ID；模板中的出站只取标签和协议。
 - 设置表中没有某个键时，按 v3.11.0 的默认值判定（3X-UI 自己就是这样读取的，已核实）。被检查的键在设置表中有多行时，`xui.db` 判为不符合，不去猜 3X-UI 用哪一行。
 
+读取前后确认受管理的 x-ui 状态；检测到变化时本次库项不作通过结论，报告 `xui.db FAIL`、依赖项 SKIP。前后检测只用于作废不可靠结果，不能证明已消除所有竞态。若 M1 实测发现源目录写入，须修订读取方法并重过 VT-72 后才能宣称只读通过；不预设新增 VFS、复制数据库、停服务或锁框架。`check` 不与面板或管理员维护操作组成事务，稳定状态下的一次 SQL 快照也不等于运行中的 Xray 配置。
+
 **其他来源。** 文件的属性和 SHA-256；`systemctl show` 给出的单元的生效属性（合并了 drop-in 之后的值）；`ss -Hltn`；`fail2ban-client status`；`/usr/local/x-ui/x-ui -v`；`curl` 访问 `127.0.0.1:20241` 的 `/ready` 和 `/config`；`vps-hardening verify` 的退出码。
+
+| 来源 | 负责的检查 | 证据上限及读取失败 |
+|---|---|---|
+| SQLite 单次脱敏快照；v3.11.0 默认设置 | 第 4.2 节标“库”的项，包括 `record.consistent` 的比较值 | 证明持久化配置；不证明已生成、加载或外部可达。读取失败由 `xui.db` 报告，依赖项 SKIP |
+| 固定摘要、文件属性、安装记录；vps-hardening 的状态文件 | `xui.files`、`cfd.files`、`state.perms`、`cfd.token`、预检各记录项 | 证明所查文件，缺失/不可读按对应项 FAIL；不输出秘密内容 |
+| systemd 管理器的属性；当前 MainPID 的必要进程属性 | `xui.unit`、服务状态、`cfd.unit`、`cfd.service`、`cfd.autoupdate` | 管理器配置和当前进程分开核对，见第 18.2 节；读取失败不能按默认通过 |
+| `ss` 与 Fail2ban 状态 | 各监听项、`xui.ipl` | 证明本机观察到的监听或 jail；不能替代外部扫描；Fail2ban 降级为文件检查时按已有规则注明 |
+| cloudflared `/ready`、`/config` | `cfd.ready`、`cfd.routes` | 分别证明连接就绪和本机可见的生效路由，不证明边缘证书、挑战策略或客户端可用；超时/解析失败为 FAIL |
+| `vps-hardening verify` 的退出码 | `hardening.verify` | 依赖组件的检查结果；不复制其实现，不转录原始输出 |
+
+没有 `cert.pem` 只证明所列目录中未发现账户证书，不是全盘不存在 Cloudflare API Token 的证明。本工具不接收或生成该 API Token；部署路径与 VT-55 的文件核验共同覆盖本工具管理范围，任意管理员另存的凭据不靠全盘内容扫描证明不存在。
 
 ### 4.2 检查项
 
@@ -221,7 +242,7 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 | `xui.env` | `/etc/default/x-ui`、`/etc/conf.d/x-ui`、`/etc/sysconfig/x-ui` 中有一个存在。部署不创建它们，SQLite 安装时 `install.sh` 也不创建（已核实） | FR-07 | M1 |
 | `xui.service` | `x-ui.service` 不是 `enabled`，或者不是 `active` | FR-07 | M1 |
 | `xui.ipl` | 存在 `/etc/fail2ban/filter.d/3x-ipl.conf`、`action.d/3x-ipl.conf` 或 `jail.d/3x-ipl.conf`；`fail2ban-client status` 的 jail 列表中有 `3x-ipl`。fail2ban 没有运行时只按文件判定，并在说明中注明 | FR-01、FR-07 | M1 |
-| `xui.db` | 第 4.1 节的读取失败：文件不存在；`-wal`、`-shm` 只有一个；有 `-journal`；`sqlite3` 报错（例如表结构与 v3.11.0 不同）；被检查的设置键有多行。说明中给出原因 | FR-07 | M1（VT-75） |
+| `xui.db` | 第 4.1 节的读取失败：文件不存在；侧文件或服务状态不满足读取前提；读取期间检测到状态变化；有 `-journal`；`sqlite3` 报错或快照无效；被检查的设置键有多行。说明中给出脱敏原因 | FR-07 | M1（VT-72、VT-75） |
 
 **面板、入站与路由（库）**
 
@@ -293,13 +314,13 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 | 编号 | 不符合的条件 | 需求 | 阶段 |
 |---|---|---|---|
 | `cfd.files` | `/usr/local/bin/cloudflared` 不存在、与固定的摘要不符（第 6 节），或者不属于 root、权限不是 0755 | FR-05、NFR-05 | M3 |
-| `cfd.unit` | `/etc/systemd/system/vps-proxy-setup-cloudflared.service` 与随工具发布的那一份不是逐字节相同，或者它有 drop-in（`DropInPaths` 不为空） | FR-05 | M3 |
-| `cfd.service` | 这个单元不是 `enabled`，或者不是 `active` | FR-05 | M3 |
+| `cfd.unit` | 正式单元文件与发布文件不同；`FragmentPath` 不是正式路径；`DropInPaths` 非空；`NeedDaemonReload` 为真；管理器加载的完整 `ExecStart`、`DynamicUser`、`LoadCredential` 等必需字段与第 18.1 节不符。字段的 systemctl 表示在 M3 核实，不用磁盘摘要代替加载状态 | FR-05 | M3 |
+| `cfd.service` | 单元不是 `enabled` 或 `active`；MainPID 无效、进程消失、有效 UID 为 0，或当前进程参数不符合第 18.2 节。只报告判定，不输出原始命令行 | FR-05 | M3 |
 | `cfd.autoupdate` | 单元的生效 `ExecStart` 中没有 `--no-autoupdate`；`cloudflared-update.timer` 或 `cloudflared-update.service` 已加载并启用。单元不存在时同样不符合（FR-05 要求"服务带 `--no-autoupdate` 运行"） | FR-05 | M3 |
 | `cfd.token` | `/etc/vps-proxy-setup/tunnel-token` 不是普通文件、不属于 root、权限不是 0600，或者为空。检查不读取它的内容 | FR-05、NFR-01 | M3 |
 | `cfd.metrics` | 20241 没有监听，或者在回环地址之外也有监听 | FR-05、FR-06 | M3 |
 | `cfd.ready` | `GET http://127.0.0.1:20241/ready`（5 秒超时）不是 200，或者 `readyConnections` 不大于 0 | FR-05 | M3（测试 VPS） |
-| `cfd.routes` | `GET http://127.0.0.1:20241/config`（5 秒超时）失败或不是 JSON；`config.ingress` 不正好是两条：第一条的主机名等于 `subDomain`（数据库读不了时用部署记录的 `sub_host`），`service` 为 `http://127.0.0.1:2096`，没有 `path`，`originRequest` 中没有 `httpHostHeader`；第二条没有主机名和 `path`，`service` 为 `http_status:` 加一个 4xx 的状态码。说明中只输出主机名和服务地址（方案设计第 7.6 节）。兜底规则的具体写法是推断，私有网络路由能否从这里看到也没有核实（第 12 节 DO-4） | FR-05、FR-07 | M3（测试 VPS） |
+| `cfd.routes` | `GET http://127.0.0.1:20241/config`（5 秒超时）失败或结构无效；`config.ingress` 不正好是两条：第一条 `hostname` 等于 `subDomain`（数据库读不了时用有效部署记录的 `sub_host`），`service` 为 `http://127.0.0.1:2096`，`path` 为 null，`originRequest.httpHostHeader` 为空字符串；第二条 `hostname` 为空字符串、`path` 为 null、`service` 为 `http_status:` 加一个 4xx 状态码。这里“未设置”不指 JSON 属性不存在；固定版本的必需字段缺失或类型不符时不能默认为通过。没有可核对的订阅主机名时同样 FAIL。只输出经校验的主机名和服务地址，不转录原始响应。真实兜底及非 ingress 路由的边界仍由 DO-4 核实 | FR-05、FR-07 | M3（测试 VPS） |
 
 **加固**
 
@@ -373,7 +394,7 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 ## 8. 实现约束
 
 - **只读。** 预检、`check` 和 `target-check`（结果文件除外）只调用读取类的命令。测试在每个用例前后比较状态摘要（第 9.4 节）。
-- **秘密不离开来源。** 数据库中的秘密留在 `sqlite3` 进程中（第 4.1 节）。令牌只在 `inputs.sh` 的变量中，不写入临时文件，不出现在命令行参数中；校验时用内建的 `printf` 经管道交给 `base64` 和 `jq`。不用 here-string：Bash 在内容超过管道缓冲区时把 here-string 写成临时文件（Bash 5.1 起的行为）。M2、M3 中向 3X-UI 的 API 发请求时，token 经文件或标准输入交给 `curl`（方案设计第 7.9 节）。
+- **秘密的传递。** 只读检查时，数据库中的秘密留在 `sqlite3` 进程中（第 4.1 节）。输入校验时 Tunnel token 只在 `inputs.sh` 的变量中，不写入临时文件、不出现在命令行参数中；用内建的 `printf` 经管道交给 `base64` 和 `jq`。不用 here-string 传秘密：Bash 在内容超过管道缓冲区时可能把它写成临时文件。M2、M3 中的 API 请求和 token 落盘遵循第 15.2 节，秘密不能经 `jq --arg` 等进程参数传递，应经标准输入或私有文件读取（方案设计第 7.9 节）。
 - **JSON。** 用 `jq` 解析，M2 中也用 `jq` 构造请求体，不拼接字符串（方案设计第 4.1 节）。
 - **按数据解析。** 输入文件、部署记录、`target-check` 的结果、`/etc/os-release` 和 vps-hardening 的状态文件都逐行解析，从不 `source`。vps-hardening 的状态文件取每个键的第一行，与它自己的 `state_get` 相同（第 14 节）。
 - **有界。** 外部命令都有超时：`sqlite3` 30 秒；`vps-hardening verify` 120 秒；`x-ui -v` 10 秒；`systemctl`、`ss`、`fail2ban-client` 30 秒；访问 `127.0.0.1:20241` 的 `curl` 5 秒；`target-check` 的每次连接 15 秒。
@@ -403,7 +424,7 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 
 **隐私扫描（VT-97）。** 扫描仓库中所有文件：
 
-- IPv4 字面量只允许 `0.0.0.0`、`127.0.0.0/8`、`10.0.0.0/8`（QEMU 用户网络）和三个文档地址段；IPv6 字面量只允许 `::`、`::1` 和 `2001:db8::/32`；
+- 示例 IPv4 只允许 `0.0.0.0`、`127.0.0.0/8`、`10.0.0.0/8`（QEMU 用户网络）和三个文档地址段；IPv6 只允许 `::`、`::1` 和 `2001:db8::/32`。另将第 2.4 节地址校验所需的公开标准 CIDR 常量按准确文本及使用位置列为有限例外；它们不是部署地址，不能据此放行同网段内任意真实地址。域名及地址的公开来源例外不改变 NFR-02 对真实基础设施标识的禁止；
 - 不允许 UUID 格式的字符串；
 - 域名只允许 `example`、`example.com`、`example.net`、`example.org`、`.test`、`.invalid` 和 `tests/privacy-allow.txt` 中列出的公开站点（例如 GitHub、Debian、Cloudflare 的文档地址）；
 - 不允许本地路径（盘符路径、`/home/`、`/Users/`）。
@@ -434,7 +455,7 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 | VT-71（M1）、VT-72～VT-76 | `m1-check` | 在第 9.5 节的 M1 基线上执行 |
 | VT-96、VT-97 | `static.yml` | 第 9.1 节 |
 
-VT-72 的实现：在 `/etc/x-ui` 中建 `.x-ui-backup-vt72` 目录；x-ui 运行时和停止后各执行一次 `check`，判定那个目录仍在、文件列表（含 `-wal`、`-shm` 是否存在）、属主和权限不变、表结构不变、各表的摘要不变（运行时按第 9.4 节的对照运行确定排除项）；停止时还判定数据库文件的摘要不变、`-wal` 和 `-shm` 仍不存在。
+VT-72 的实现：在 `/etc/x-ui` 中建 `.x-ui-backup-vt72` 目录；x-ui 稳定运行时和稳定停止后各执行一次 `check`，核对目录、文件列表（含侧文件）、属主、权限、表结构和各表摘要不变（运行时按第 9.4 节确定排除项）；停止时还判定数据库摘要不变、侧文件仍不存在。DO-1 同时验证读取期间启动/停止的情形：测试驱动自身造成的文件变化用对照运行区分，不能把检查新建/删除侧文件算进排除项。作废不可靠结论与证明不写文件是两个判据。具体协调方法在 M1 实现中确定，门禁通过前必须有证据，不另建测试矩阵。
 
 VT-73：在私有挂载命名空间中把 `/usr/local/x-ui/x-ui` 绑定为一个打印 `9.9.9` 的脚本，判定 `xui.version`、`xui.files` 不符合，库项为 `SKIP`。
 
@@ -456,8 +477,8 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 
 **基线。** S1 之后，测试驱动执行部署第 4 步中与面板有关的部分：`x-ui setting -listenIP 127.0.0.1`，然后重启 x-ui。执行一次 `check` 作为基线并归档。按第 4 节的判定，预期（推断，以 M1 的实际基线为准）：
 
-- 通过：`root`、`platform`、`xui.*`（`xui.files` 要在 VO-1 取得摘要之后）、`panel.listen`、`clients.limit-ip`、`sub.enable`、`sub.cert`、`sub.paths`、`sub.json`、`sub.info-node`、`sub.updates`、`listen.api`、`listen.metrics`、`secrets.handoff`、`absent.*`、`hardening.verify`；
-- 不符合：`inbounds.set`、`routing.outbounds`（模板仍是默认值）、`sub.listen`、`sub.domain`、`sub.uri`、`sub.clash`、`sub.remark`、`listen.reality`、`listen.forwarder`、`listen.sub`、`secrets.install-result`、`record.consistent`、`cfd.*`；
+- 通过：`root`、`platform`、`xui.*`（`xui.files` 要在 VO-1 取得摘要之后）、`panel.listen`、`routing.outbounds`（有效默认模板已有 direct/freedom 和 blocked/blackhole）、`clients.limit-ip`、`sub.enable`、`sub.cert`、`sub.paths`、`sub.json`、`sub.info-node`、`sub.updates`、`listen.api`、`listen.metrics`、`secrets.handoff`、`absent.*`、`hardening.verify`；
+- 不符合：`inbounds.set`、`sub.listen`、`sub.domain`、`sub.uri`、`sub.clash`、`sub.remark`、`listen.reality`、`listen.forwarder`、`listen.sub`、`secrets.install-result`、`record.consistent`、`cfd.*`；
 - 跳过：依赖 REALITY 入站或转发入站的项（`reality.*`、`forwarder.settings`、`routing.rules`、`clients.count`、`clients.flow`），`sub.rules`（还没有规则文本），`state.perms`；
 - 警告：`secrets.api-tokens`（安装 token 仍在）。
 
@@ -475,11 +496,14 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 | 经面板接口打开 `subJsonEnable` | `sub.json` |
 | 经面板接口打开 `subInfoNodeEnable` | `sub.info-node` |
 | 经面板接口把 `subUpdates` 改为 6 | `sub.updates` |
+| 经设置接口把 `subEnable` 设为 false；只改持久化设置，不主动重启服务 | `sub.enable`；若接口产生连带变化，逐项列出实际对应项 |
+| 经设置接口设置测试证书和密钥路径，测试文件只属于客体夹具 | `sub.cert`；不向外发布证书，失败或连带变化须记录 |
+| 经设置接口把 `subPath` 或 `subClashPath` 设为默认值或过短值 | `sub.paths`；如 API 拒绝该测试值，用隔离测试夹具核验读取判据，记录不能由 API 生成该状态的事实 |
 | 放置 `/root/.acme.sh/acme.sh` | `absent.acme` |
 | 放置 `/root/.cloudflared/cert.pem` | `absent.cf-credentials` |
 | 加一条 UFW 规则使 `vps-hardening verify` 不通过 | `hardening.verify` |
 
-经面板接口的注入用 `install-result.env` 中的 API token（M1 中还没有交给管理员的文件）。`sub.enable`、`sub.cert`、`sub.paths`、`clients.limit-ip`、`listen.api`、`listen.metrics` 在 M1 基线中通过，但注入要么会使订阅服务或 Xray 无法正常运行、连带改变其他项，要么需要使用者，所以和其余各项一起在 M2 中注入，注入方法在 v0.2 中确定。
+经面板接口的注入用 `install-result.env` 中的 API token（M1 中还没有 handoff），调用完整设置读取和更新的契约见第 15 节。`sub.enable`、`sub.cert`、`sub.paths` 不再笼统延期；具体 API 可接受值和连带项在 M1 核实，测试夹具不作为生产写入路径。`clients.limit-ip` 需要使用者，仍在 M2；`listen.api`、`listen.metrics` 的偏差涉及 Xray 运行配置，随 M2 的配置和重启注入。一个偏差影响多项时列明全部对应项，不能以此省略不依赖部署结果的 M1 注入。基线/注入可随实测纠正，不能把未执行的项计为通过。
 
 ## 10. 运行证据
 
@@ -487,7 +511,7 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 
 ## 11. 已知限制
 
-- **x-ui 停止时的读取。** 这时以 `immutable` 打开数据库，SQLite 不检查锁。如果 x-ui 恰好在检查期间启动并写入，快照可能不一致，检查结果可能有误，但不会改动数据库；重新执行一次即可。
+- **只读读取与并发。** `immutable` 不检查锁和变化；检查期间启动写者可能使结果不可靠。`mode=ro` 路径也有侧文件检查后被删除的窗口。第 4.1 节的状态检测不能被称为消除了竞态，DO-1 在 M1 验收前核实；本次结论无效时不保证重跑一次必然正确。此限制不授权修改数据库或停止服务。
 - **结论的范围。** `check` 全部通过只说明检查范围内的配置符合要求，不说明从中国大陆可达，也不说明伪装有效（方案设计第 7.6 节）。
 - **Tunnel 的路由。** `cfd.routes` 只能看到 `/config` 中有的内容。私有网络路由等不在 ingress 中的配置能否从这里看到，在 M3 中核实（DO-4）；看不到时这里记录为限制。
 - **订阅路径的随机性。** `sub.paths` 只排除默认值和过短的路径，不能证明路径是初始化时随机生成的。部署不改订阅路径（`deploy` 只用 3X-UI 初始化时生成的值），之后在面板中改成可猜的值，检查发现不了。
@@ -497,46 +521,53 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 
 ## 12. 待决事项
 
-| 编号 | 事项 | 处理 | 负责与时间 | 是否阻塞 v0.1 |
+| 编号 | 事项 | 处理 | 负责与时间 | 关闭条件与影响 |
 |---|---|---|---|---|
-| DO-1 | Debian 13 的 `sqlite3`（3.46.1）对 `-safe`、URI 文件名、`immutable=1` 和忙等待的实际行为；`mode=ro` 的读取除 `-shm` 的读标记外不改动文件 | VT-72、VT-75 | 实现，M1 | 否 |
-| DO-2 | systemd 257 下 `systemctl show` 的 `ExecStart`、`WorkingDirectory`（是否去掉末尾的斜杠）、`Environment`、`EnvironmentFiles` 的输出格式；`fail2ban-client status` 中 jail 列表的格式 | M1 基线 | 实现，M1 | 否 |
-| DO-3 | VO-1：安装后的程序文件和服务单元的摘要；`x-ui.service` 来自发布包还是 tag 路径 | 从固定的发布包和固定提交取得，写入第 6 节和 `pins.sh` | 测试实现，M1 | 否 |
-| DO-4 | `/config` 中兜底规则的写法（推断为 `http_status:404`）；私有网络路由能否从 `/config` 看到 | 测试 VPS 上核实，按结果修改 `cfd.routes` | 实现，M3（需要授权，VO-7） | 否 |
-| DO-5 | 在面板中重新保存路由之后，规则中是否出现 `routing.rules` 允许之外的字段 | 在虚拟机中经面板接口重新保存一次，比较前后的模板 | 实现，M2 | 否 |
-| DO-6 | 方案设计第 7.5 节交给详细设计的两项：Cloudflare 边缘证书的覆盖范围；对非浏览器客户端的挑战，具体是 Bot Fight Mode 还是用 WAF 跳过规则处理 | 按 Cloudflare 免费计划的现行文档核实，写入 M3 的版本和使用说明 | 设计，M3 之前 | 否 |
-| DO-7 | vps-hardening 已发布 `v0.1.2`（修复版），需求 A-1 和 D9 固定的是 `v0.1.1` | 改用 `v0.1.2` 要改需求 A-1、验证计划第 3.2 节和 `hardening.version` 的列表，由用户决定；不改时 `v0.1.2` 的主机预检给出警告、不阻止 | 用户 | 否 |
-| DO-8 | `curl` 在 HTTP/2 中是否把自定义的 Host 用作 `:authority` | VT-81 的 HTTP/2 部分 | 实现，M1 | 否 |
-| DO-9 | 需求第 11.2 节交给详细设计的规则集取舍：Apple、微软等在国内有节点的服务是否单独直连；国内 IP 规则是否加 `no-resolve`；规则的名称、顺序和取舍 | 随规则文本在 v0.2 中确定 | 设计，M2 | 否 |
-| DO-10 | VT-12 的注入方法：`install.sh` 运行之后、安装后核对之前替换一个所装的文件（验证计划第 4.2 节） | 在 v0.2 中随部署第 3、4 步的契约确定 | 设计，M2 | 否 |
-| DO-11 | VT-30 所用的 3X-UI 路由测试接口（`/panel/api/xray/routeTest`）的路径和参数（验证计划第 4.5 节） | 按 v3.11.0 的源码和 OpenAPI 文档核实，写入 v0.2 | 设计，M2 | 否 |
+| DO-1 | Debian 13 SQLite 的只读模式、`-safe`、URI、忙等待与侧文件行为；服务状态变化时的竞态 | 第 4.1、9.3 节，VT-72、VT-75；如观察到检查新建/删除侧文件，必须修订读取方式，不预选复杂框架 | 实现，M1 | M1 验收前有静止及变化状态证据；未核实不阻止编写实现，不得宣称只读门禁通过 |
+| DO-2 | systemd 257 的属性输出规范化、Fail2ban jail 列表格式 | M1 基线核实 x-ui 属性和列表；cloudflared 的凭据/进程属性在 M3 核实 | 实现，M1/M3 | 相应解析器和偏差测试通过，不能以字符串猜测代替实测 |
+| DO-3 | VO-1：安装后文件和单元摘要、服务单元实际来源 | 从固定发布包/提交取得，写入第 6 节与实现的固定值 | 测试实现，M1 | 相关摘要检查能运行前关闭；未取得不编造摘要 |
+| DO-4 | 控制台实际兜底；私有网络路由在 `/config` 中的可见范围 | 空字段的固定源码表示已在第 4.2、18.3 节明确；真实配置仍需测试 VPS 核实 | 实现，M3，依赖 VO-7 | M3 真实路由验收前明确覆盖与限制；不计为 M1 阻塞 |
+| DO-5 | 经面板再次保存路由的字段和表示 | 在 VM 中比较模板及最终生成配置，校正检查允许字段 | 实现，M2 | VT-16、VT-71 的相关项通过 |
+| DO-6 | 订阅证书的实际覆盖与挑战功能配置 | 官方产品限制已核实（第 18.3 节）；Zone 边界、有效证书、当前开关及调整影响由管理员确认 | 设计与管理员，M3 前 | 外部证书和非浏览器拉取验证；不擅自关闭 Zone 范围功能 |
+| DO-7 | hardening `v0.1.2` 与已批准 A-1、D9 的 `v0.1.1` 不同 | 保持批准基线；升级须用户决定并同步需求与验证计划。未升级时预检按既定版本差异给 WARN，不自行改白名单 | 用户，升级前 | 待定；M1 可沿用 `v0.1.1`，不由本文批准升级 |
+| DO-8 | curl 的 HTTP/2 Host → `:authority` 实际行为 | VT-81 由替身记录收到的权威字段，不只看客户端参数 | 实现，M1 | HTTP/1.1 和 HTTP/2 探测均经已知交叉路由对象自检 |
+| DO-9 | Apple、微软等服务的直连取舍；国内 IP 的 `no-resolve`；规则名称与顺序 | 随 M2 规则文本提交评审，保持 D13 选型；本文不把未写的 YAML 计为完成 | 设计，M2 | 规则定稿并满足 VT-42、VT-44、VT-96；不阻塞 M1 |
+| DO-10 | 安装后摘要偏差的注入实现 | 第 19 节已定义阶段接缝，不需要生产故障开关 | 测试实现，M2 | 设计待本草案评审；VT-12 的真实测试仍未执行 |
+| DO-11 | 路由测试和新增 API 契约的运行核实 | 第 15、19 节按固定源码规定；核对实际 JSON 表示、部分写入、撤销结果和核心选路 | 实现，M2 | VT-15～VT-18、VT-30、VT-31；源码不等于运行通过 |
+| DO-12 | shortId 生成来源与已批准上游不一致 | 第 15.1 节给出证据和候选修订；用户澄清方案第 7.3、7.9 节及 VT-16 后才能选择实现 | 用户/设计，M2 写入前 | 只阻塞依赖 shortId 的写入和验收；不虚构服务端接口，不擅自修改已批准上游 |
 
-验证计划中仍待用户决定的 VO-5（FR-11 三个客户端的平台）和 VO-7（测试 VPS 的时间、主机和授权范围）都在 M3 之前，不影响 M1。
+验证计划中仍待用户决定的 VO-5（FR-11 三个客户端的平台）和 VO-7（测试 VPS 的时间、主机和授权范围）都在 M3 之前，不影响 M1。VO-2、VO-3、VO-4、VO-6 继续由验证计划拥有，本文引用，不代为关闭。以上“已核实”仅指证据，“待评审设计”不等于用户批准；没有把任何 DO 或 VO 记为运行通过。
 
 ## 13. 需求追踪
 
-| 需求或设计 | 本文 |
-|---|---|
-| FR-01 | 第 3 节 `new-host.*`；第 4.2 节 `xui.*`；第 6 节 |
-| FR-02 | 第 2.4 节 `target`；第 2.7、5 节；第 3 节 `target.checked`；第 4.2 节 `inbounds.set`、`reality.*`、`forwarder.settings`、`routing.*` |
-| FR-03 | 第 2.4 节 `users`；第 4.2 节 `clients.*` |
-| FR-04 | 第 4.2 节 `sub.*`、`listen.sub`、`reality.hosts` |
-| FR-05 | 第 2.4 节 `tunnel_token`；第 2.8 节；第 4.2 节 `cfd.*`、`absent.*` |
-| FR-06 | 第 2.8 节的端口；第 4.2 节 `listen.*` |
-| FR-07 | 第 2.6 节；第 4 节 |
-| FR-12 | 第 2.4、2.5 节；第 3 节 |
-| NFR-01 | 第 2.3 节；第 4.1 节"快照中没有秘密"；第 8 节；第 9.3 节 VT-74 |
-| NFR-02 | 第 9.1 节的隐私扫描 |
-| NFR-03 | 第 3 节 `platform`；第 9.1 节 |
-| NFR-04 | 第 3 节 `hardening.*`、`tuning.dropin`；第 4.2 节 `hardening.verify` |
-| NFR-05 | 第 6 节 |
-| NFR-07 | 第 4.1 节；第 9.3 节 VT-72、VT-76 |
-| D21 | 第 4.2 节 `sub.listen`、`sub.cert`、`absent.*` |
-| D22（OD-2） | 第 4.2 节 `routing.rules` 的规则 3、4 |
-| 方案设计第 7.5 节"值是否包含路径" | 第 4.2 节 `sub.uri`，第 14 节 |
-| 验证计划 VT-75"退出码取值" | 第 2.2 节 |
-| 验证计划第 3.3 节"接受文档地址" | 第 2.4 节 `node_ip` |
-| 验证计划第 4 节"排除清单在 M1 中确定" | 第 9.4 节 |
+下表追踪的是设计和验证责任，不是完成报告；所有运行用例仍未执行。
+
+| 需求或上游约束 | 本文设计位置 | 验证及阶段/待定 |
+|---|---|---|
+| FR-01 | 第 3、4.2、6、16.1 节，安装前后摘要与回环面板 | VT-10～VT-13；M2，摘要先在 M1 取得（DO-3） |
+| FR-02 | 第 2.4、2.7、5、15.1、17 节；`reality.*`、`forwarder.settings`、`routing.*` | VT-16、VT-20～VT-29、VT-80、VT-81；M1 target、M2 流量，shortId 待 DO-12；真实 target 在 M5 |
+| FR-03 | 第 2.4 节 `users`、第 4.2 节 `clients.*`、第 15 节 | VT-35～VT-38；M2；停用/重置/删除的业务结果不由数量检查替代 |
+| FR-04 | 第 4.2 节 `sub.*`、第 15.1、15.2、18.3 节 | VT-40～VT-44；M2，规则文本待 DO-9，真实拉取在 M3 |
+| FR-05 | 第 2.4、2.8、4.2、18 节；token 生命周期 | VT-50～VT-55；M2 残留、M3 服务与真实 Tunnel；DO-4、DO-6、VO-7 |
+| FR-06 | 第 2.8、4.2、16.1、17 节；开放端口仍为管理员操作 | VT-60～VT-62，M2；验证计划第 5 节外部扫描，M5 |
+| FR-07 | 第 2.2、2.3、2.6、4、18.2 节；数据来源分层 | VT-70～VT-76；M1～M3 按基线分阶段，不把 SKIP 或静态证据当业务验收 |
+| FR-08 | 第 2、16、18 节提供使用说明的契约输入 | 完整操作手册及 SC1～SC7 在 M4、M5；验证计划第 5 节 M5，本文不代交手册 |
+| FR-09 | 第 16.2、16.3 节；同版本备份、恢复和单连接器切换 | VT-85、VT-86，M4；真实 Tunnel 切换需 VO-7 授权 |
+| FR-10 | 第 16.3 节；原机回退的两次停止和旧备份 | VT-87～VT-90，M4；版本沿用 VO-4，不在此升级 |
+| FR-11 | 第 18.3 节的拉取/客户端边界 | 验证计划第 5 节 M3、M5；客户端说明在 M5，平台 VO-5 待定 |
+| FR-12 | 第 2.4、2.5、3、15、16.1、19 节 | VT-01～VT-05、VT-15～VT-18；M1 预检、M2 写入，无自动回滚 |
+| NFR-01 | 第 2.3、4.1、8、15.2、18.1、19 节 | VT-13、VT-17、VT-52、VT-74 及全部归档扫描；M1～M3 |
+| NFR-02 | 第 9.1、19 节；公开常量有限例外与私有清单 | VT-97；各次提交前；本地清单不入库 |
+| NFR-03 | 第 3 节 `platform`、第 9.1、9.2 节 | Debian 13 amd64，M1 起；不扩 Debian 12/Ubuntu 矩阵 |
+| NFR-04 | 第 3、4.2、16.1～16.3 节；保留 tuning drop-in | VT-05、VT-18、VT-62、VT-94；M1/M2，hardening 版本 DO-7 |
+| NFR-05 | 第 6、16.1、18.1 节；固定提交、摘要、禁自动更新 | VT-11、VT-12、VT-50、VT-51、VT-98、VT-99；M2～M4 |
+| NFR-06 | 第 16.1、18.1 节；服务解耦与独立业务中断判据 | VT-54、VT-92、VT-93；M2/M3，操作等待上限不放宽 10 秒判据 |
+| NFR-07 | 第 4.1、9.3、9.4 节；一次快照、状态变化和确定性 | VT-72、VT-75、VT-76；M1，DO-1 关闭前不宣称只读保证 |
+| D21、D22/OD-1～OD-4 | 第 17、18 节；回环订阅、远程 Tunnel、SNI 与回国规则、动态用户 | 沿用批准选择，不重新选型；SR-3、SR-8 例外仍需原决定流程 |
+| 方案第 7.5 节“值是否包含路径” | 第 4.2 节 `sub.uri`、第 14、15.2 节 | 已核实拼接源码；VT-43 在 M2 验证 |
+| VT-75 退出码；验证计划第 3.3 节文档地址 | 第 2.2、2.4 节 | M1；不因测试保留地址放宽私有/非公网地址的其他拒绝规则 |
+| 验证计划第 4 节排除清单、VT-71 同阶段基线 | 第 9.4、9.5、19 节 | M1 实测清单；不把检查造成的写入列为排除 |
+| VT-12、VT-30 交给详细设计的接口 | 第 19 节、DO-10、DO-11 | 接缝和 API 设计已写，执行验证在 M2 |
 
 ## 14. 本文新核实的事实（2026-10-30）
 
@@ -557,3 +588,187 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 | 只读打开 WAL 数据库时，要么 `-shm` 和 `-wal` 已存在，要么目录可写以便创建它们，要么以 `immutable` 打开 | SQLite 文档 `wal.html`（Read-Only Databases） |
 | Debian 13 的软件包版本：`sqlite3` 3.46.1-7+deb13u2，`jq` 1.7.1-6+deb13u4，`curl` 8.14.1-2+deb13u7，`openssl` 3.5.7-1~deb13u3，`iproute2` 6.15.0-1 | packages.debian.org（trixie），2026-10-30 |
 | vps-hardening 的状态文件是 `键=值` 行，`state_get` 取第一行；`--version` 输出 `vps-hardening <版本>`；默认分支的版本已是 `0.1.2` | vps-hardening `lib/vps-hardening/state.sh`、`bin/vps-hardening` |
+| `setting/update` 先保留遮蔽秘密，再按完整 `AllSetting` 遍历保存；不能当 PATCH 使用 | 固定提交的 [setting.go：UpdateAllSetting](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/service/setting.go#L1669-L1745)、[设置视图控制器](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/setting.go#L100-L109) |
+| POST `/xray/` 对旧包装模板有自愈写入，返回的 `obj` 为 JSON 字符串；`xray/update` 接收表单，省略测试 URL 会复位默认值，保存与核心更新并非一个事务 | 固定提交的 [xray_setting.go：读取与写入](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/xray_setting.go#L77-L164)；与 [OpenAPI](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/frontend/public/openapi.json) 的读取示例有表示差异 |
+| 安装 token 的元数据不含明文；删除接口要求 `expectedScope`，不能只给 ID；安装结果用 `%q` 写出 | [token 服务](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/service/panel/api_token.go#L19-L120)、[删除控制器](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/setting.go#L281-L292)、[install.sh](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/install.sh#L148-L168) |
+| shortId 由前端的 `randomShortIds` 生成；固定版本 OpenAPI 和 server 路由未提供 shortId 生成接口，与上游“接口生成”的文字不一致 | [前端调用](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/frontend/src/pages/inbounds/form/useSecurityActions.ts#L176-L184)、[随机值实现](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/frontend/src/utils/index.ts#L204-L232)、[server 路由](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/server.go#L45-L87)；DO-12 |
+| 新增使用者和路由测试的请求格式；routeTest 调核心的选路测试，不发送业务请求 | [客户端控制器](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/client.go)、[OpenAPI](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/frontend/public/openapi.json) 的 `/clients/add`、`/xray/routeTest`；第 19 节不以该接口替代 VT-31 |
+| cloudflared 的 tunnel/run 参数归属，token 环境变量优先于 token 文件；有效 ingress 序列化保留空 Host 字段和 path | cloudflared 2026.10.5 [cmd.go](https://github.com/cloudflare/cloudflared/blob/2026.10.5/cmd/cloudflared/tunnel/cmd.go)、[subcommands.go](https://github.com/cloudflare/cloudflared/blob/2026.10.5/cmd/cloudflared/tunnel/subcommands.go#L714-L786)、[rule.go](https://github.com/cloudflare/cloudflared/blob/2026.10.5/ingress/rule.go#L13-L32)、[config.go](https://github.com/cloudflare/cloudflared/blob/2026.10.5/ingress/config.go#L305-L306)、[有效配置导出](https://github.com/cloudflare/cloudflared/blob/2026.10.5/orchestration/orchestrator.go#L255-L278) |
+| `LoadCredential` 把凭据置于服务可读的只读目录，ExecStart 可用 `CREDENTIALS_DIRECTORY` 引用；支持动态用户并不证明本项目已运行成功 | systemd v257 [systemd.exec.xml：Credentials](https://github.com/systemd/systemd/blob/v257/man/systemd.exec.xml#L3448-L3539)；运行验证在 M3 |
+
+## 15. 3X-UI API 与凭据（M2）
+
+### 15.1 请求和响应契约
+
+以下路径相对于 `http://127.0.0.1:<面板端口>/<webBasePath>`；拼接时确保路径之间只有一个 `/`。`webBasePath` 从安装结果读取，属于秘密，不显示完整 URL。只连接回环地址，不使用代理环境变量，不跟随重定向，不降级到另一认证方式。认证为安装生成的 admin 范围 Bearer token；不登录浏览器会话，不使用 Cookie，也不长期创建检查专用 token。
+
+所有请求设置连接超时 5 秒、单次总超时 30 秒；这是本草案选择的操作上限，不是已测性能指标。HTTP 200 还须满足 JSON 的 `success` 为布尔值 true、`obj` 满足该接口的结构，才算接口成功。HTTP 200 加 `success=false` 仍失败，不按可能本地化的 `msg` 判断成功。超时、认证失败、非预期状态码、结构缺失均停止该步骤；写操作的结果分类见第 15.3 节。原始响应、`msg`、响应头和请求体都不直接输出。
+
+| 用途 | 方法和路径 | 输入、输出和限制 |
+|---|---|---|
+| 读取完整设置 | POST `/panel/api/setting/all` | 无业务请求体；`obj` 为设置视图对象。秘密被遮蔽，`has*` 是只读视图元数据；此接口用于部署，不用于 `check` |
+| 写订阅设置 | POST `/panel/api/setting/update`，JSON | **全量设置更新，不是 PATCH**。由完整读取结果构造固定版本 `AllSetting` 的全部字段，去掉视图元数据，只修改方案设计第 7.5 节指定的订阅键；其余字段保持原值。空的遮蔽秘密按上游 `preserveRedactedSecrets` 保留，不发送清除秘密的控制字段。写后重新读取并逐字段核对，不能只发送几项而让其他字段落为零值 |
+| 读取 Xray 模板 | POST `/panel/api/xray/` | 固定源码的 `obj` 是 JSON 编码的字符串，解析一次得到含 `xraySetting`、`outboundTestUrl` 等字段的对象；其中 `xraySetting` 是模板对象。OpenAPI 示例与此存在表示差异，按固定源码并在 M2 实测。读取还可能修复旧的嵌套模板并写库，所以只能在写入前核对通过后用于部署，不能用于预检、拒绝分支或 `check` |
+| 写 Xray 模板 | POST `/panel/api/xray/update`，表单编码 | `xraySetting` 为完整模板的 JSON 字符串；`outboundTestUrl` 显式保留读取值，不能省略或传空，否则上游恢复默认值。只添加第 17 节四条路由，保留其余模板。保存、设置测试 URL、应用到核心不是一个整体事务；响应失败也可能已经保存 |
+| 读取入站 | GET `/panel/api/inbounds/list` | `obj` 为数组。入站的 `settings`、`streamSettings`、`sniffing` 按固定版本为对象；读取返回的 `id`、`tag`，不凭端口猜 tag |
+| 新增入站 | POST `/panel/api/inbounds/add`，JSON | 一次一个入站，传 `enable`、`protocol`、`port`、`listen`、`remark`、`settings`、`streamSettings`、`sniffing`。本地入站 `nodeId=null`；`expiryTime=0`、`total=0`。配置字段统一传对象，不混用旧的 JSON 字符串形式。REALITY 另设 `shareAddrStrategy=custom`、`shareAddr=node_ip`、`excludeFromSub=false`、`disableFlow=false`。响应和重新读取必须能唯一定位刚建的入站 |
+| 新增使用者 | POST `/panel/api/clients/add`，JSON | `client` 对象含代号 `email`、`enable=true`、`flow=xtls-rprx-vision`、`limitIp=0`、`totalGB=0`、`expiryTime=0`、`tgId=0`，`inboundIds` 数组只含 REALITY 入站的数值 ID；省略 UUID 的输入字段 `client.id` 和 `client.subId`，由服务端生成。不在入站的嵌套客户端和全局客户端接口中重复添加同一人 |
+| 读取使用者 | GET `/panel/api/clients/get/<email>` | email 作为单一路径段编码；读取 `obj.client` 与 `obj.inboundIds`，核对代号、`obj.client.uuid`、`obj.client.subId`、flow、启用状态和所属入站。此处 `obj.client.id` 是数值数据库主键，不是 UUID。唯一性在进程内比较，只输出代号及计数；各人的 UUID 和订阅 ID 均应互异 |
+| 生成 REALITY 密钥对 | GET `/panel/api/server/getNewX25519Cert` | `obj.privateKey`、`obj.publicKey`；校验字段、编码和解码后的 32 字节长度，只用于本次入站请求和核对，私钥不写入 handoff。生成接口使用已安装的 Xray，仍须先完成安装核对 |
+| 列出安装 token | GET `/panel/api/setting/apiTokens` | `obj` 数组只含元数据。全新安装应能唯一定位名为 `install`、启用、admin 范围的记录；保留其数值 ID。异常数量或身份不符时停止，不批量删除其他 token |
+| 撤销安装 token | POST `/panel/api/setting/apiTokens/delete/<id>`，JSON | 必须传 `expectedScope=admin`；删除指定 ID。之后用原 token 访问此前成功的固定路径，应为 HTTP 401，并通过第 4.1 节只读数据库方式确认该 ID 已不存在。404、超时或服务停止不能证明撤销 |
+| 重启面板 | POST `/panel/api/setting/restartPanel` | 无业务请求体；成功只说明已调度重启。固定源码延迟约 3 秒触发重启，随后观察 systemd、API 可用性和 `ss`；不能收到 200 就认为新监听已生效 |
+
+**shortId 的上游冲突（DO-12）。** 固定 v3.11.0 的服务端路由和 OpenAPI 有 UUID、X25519 生成接口，没有 shortId 生成接口；前端通过浏览器随机数生成 shortIds。方案设计第 7.3、7.9 节及 VT-16 的“由接口生成 shortId”因此尚不能按原文实现。可供评审的修订方向是由 VPS 的密码学安全随机源生成一个 8 字节值、编码为 16 个十六进制字符，再经 API 写入；**这只是建议，尚未采用**。在用户澄清上游前，不虚构接口、不退化为固定值；只阻塞 M2 中依赖该值的写入和 VT-16，不阻塞 M1。
+
+### 15.2 秘密的来源、存放与删除
+
+| 对象 | 允许的存放与传递 | 正常完成点与失败时处理 |
+|---|---|---|
+| 部署输入文件、交互输入 | 第 2.4 节的文件或进程内存；不导出到子进程环境 | 预检拒绝或取消保留输入文件。首次部署完成第 7 步导入后删除输入文件，内存中的 Tunnel token 留到第 8 步落入专用文件；`--migrate` 在安装准备与 token 文件写入确认后删除。删除前确认路径仍对应原打开文件，替换过则不删除替代文件并报告未完成清理 |
+| `/etc/x-ui/install-result.env` | root、0600、普通文件，从同一已核对描述符读取；不 `source`、不 `eval` | 上游以 Bash `printf %q` 编码，不能当第 2.4 节的原始值文件盲读。本工具清除继承覆盖并走全新安装分支后，只接受所需字段的未转义格式：用户名/密码各 10 个、路径标签 18 个 ASCII 字母数字，API token 为 48 个字母数字，端口为数字；不用 `XUI_ACCESS_URL`。所需字段含引号、反斜杠或其他形式时停止并保留受保护原文件，不执行 shell 解码。M2 核实实际格式 |
+| 面板凭据和 `webBasePath` | 进程内存、3X-UI 数据库、root 0600 的 `handoff` | handoff 原子发布并核对后才删除安装结果；管理员取走后删除 handoff。脚本不代为发送，不把内容作为成功摘要 |
+| 安装 admin token | 内存、安装结果；向 `curl` 传入的头配置用受保护文件或标准输入 | 写入、订阅核对及所有需要认证的读回完成后撤销；证实撤销后删除安装结果和认证临时文件。若撤销结果未知，不宣布完成，明确仍需人工核对，不能以删掉明文文件代替撤销 |
+| REALITY 私钥、shortId、客户端 UUID、订阅 ID 和路径 | 仅部署内存及数据库；由 3X-UI 生成订阅。shortId 的生成方式待 DO-12 | 临时请求/响应退出时删除；不进入日志。handoff 仅含订阅 URL 所必需的路径和订阅 ID，不另列私钥、UUID 或 shortId |
+| Tunnel token | 内存与 `/etc/vps-proxy-setup/tunnel-token`；运行时由 systemd 的凭据目录提供 | token 文件同目录暂存、核对属主权限后改名；不把 token 放进 argv、Environment、单元内容或 journal。失败不自动删除已安装的持久文件；迁移或疑似泄露由管理员轮换，运行中的服务需重启才能读取新凭据 |
+| 安装日志、API 请求和响应临时文件 | `mktemp -d` 的 root 0700 私有目录，文件 0600，禁止 xtrace 和 curl verbose/trace | 正常退出、ERR、INT、TERM 清理；掉电/SIGKILL 后须按失败说明检查残留。任何诊断摘录先删除已知秘密及敏感字段；无法可靠脱敏时只报告步骤、退出状态和原因类别 |
+
+`handoff` 采用 UTF-8 JSON：`format=1`、`panel`（`username`、`password`、`webBasePath`、`port`）、`users` 数组（每项 `email`、`subscriptionUrl`、`mihomoUrl`）。两个地址分别用当前 `subPath`、`subClashPath` 和该人的 `subId` 构造：`https://<sub_host>/<路径>/<subId>`，路径连接规则按第 14 节，不重生成订阅路径。文件只显示交付位置，内容不输出。写在目标目录的临时文件，完成解析回验、数量和权限核对后原子改名；异常停止，保留仍需要的原始凭据来源。
+
+启动安装器时只显式传入方案规定的 `XUI_*`；清除继承的用户名、密码、路径、数据库位置和数据库类型覆盖，防止旧环境变量改变新装假设。这个限制与上游 `%q` 格式一起在 M2 测试，不增加通用 shell 文件解释器。
+
+### 15.3 写入结果、重试与并发
+
+- 只读 `check` 不使用上述 API。`deploy` 的读取也不能统称无副作用，例如 `/xray/` 的自愈行为；第 5 步拒绝写入所需的事实优先用第 4.1 节只读快照核对。
+- 写前重新确认目标尚未有业务配置；本工具的锁只排斥另一个本工具进程，不锁住管理员、面板或 3X-UI。部署期间要求没有并行面板操作；检测到读回与预期不符立即停止，不覆盖第三方改动。首次部署 API 跨请求没有整体事务，这个窗口不承诺消除。
+- 每个新增和更新请求只发送一次。收到明确失败、结构错误，或请求发出后断开/超时，均停止后续写入。后两种记为“结果未知”，不能解释为没写入，也不使用 `curl --retry` 重放写操作。
+- 结果未知时可重新读取相应入站、客户端或设置，并在受保护内存中比较自然键、返回 ID 和目标值，供人工判断当前状态；不因此继续后续步骤或自动回滚。即使单个接口采用事务，也不能推断它与核心重载一起原子完成。
+- token 删除是特殊收尾：响应丢失后只有“原 token 在既定路径被拒绝，且数据库中该 ID 不存在”两项均成立，才可判为撤销完成；否则停止并保留恢复提示。不会为查证而生成第二个 admin token。
+- 读请求在连接失败时至多重试一次，前提是已确认该路径在当前数据状态下没有写入副作用；面板重启后的等待按第 16.1 节轮询。401、字段不符、业务拒绝不通过重试掩盖。
+
+## 16. 写入、备份与恢复顺序
+
+### 16.1 首次部署的状态与边界（M2、M3）
+
+本节细化方案设计第 7.3 节的 1～9 步，不新增恢复子命令。下载和核对用私有临时目录；“主机不变”指持久配置、服务、数据库和包不变，临时下载与锁的生命周期不算部署写入。每步结束报告非秘密的阶段和结果。
+
+| 上游步骤 | 必须完成的动作及顺序 | 完成证据与失败后的可见状态 |
+|---|---|---|
+| 1 预检 | 第 2.5、3 节；显示变更摘要并确认。再次确认服务、文件和端口没有改变 | 未确认不安装；输入文件保留 |
+| 2 预取核对 | 固定提交、安装器、发布包、`x-ui.sh` 和单元逐一校验；不运行未核对的文件 | 任一不符即停，持久主机状态不变（VT-11） |
+| 3 安装 | 保存 `90-proxy-vps.conf` 的路径、权限和摘要供后续核对；非交互运行已核对安装器，输出受保护 | 安装器可能已启动服务或写库；失败属于部分安装，不假称未改动 |
+| 4 安装后核对 | 先核对所装文件，再执行 `x-ui setting -listenIP 127.0.0.1` 并重启；验证面板只监听回环、tuning drop-in 保持、无 `3x-ipl` | 安装后摘要不符走 SR-9：停止，不写业务设置，提示按潜在入侵处理并重装；不把普通卸载清理当作消除了该风险（VT-12） |
+| 5 写入前核对 | 确认版本、无入站/使用者、有效订阅设置为新装默认；只读比较通过后，读取安装结果并验证安装 token。检查所选 target 的有效记录；所有输入仍在内存中 | 已有业务配置则拒绝。拒绝路径不调用可能自愈写库的 `/xray/`，不删除输入或安装结果（VT-15） |
+| 6 写业务配置 | 获取完整设置和模板；按第 15 节生成密钥（shortId 先解决 DO-12）。保留订阅路径，写订阅设置；创建回环转发入站和 REALITY 入站，取得真实 ID/tag 后写模板前四条路由；逐人创建客户端并读回。初始化时公网 443 尚未开放，最终路由确认前不把节点交给使用者 | 每次写入后核对本项。取得 tag 后才写路由是对上游写入步骤内部的细化，不猜 tag。失败停止且保留已完成部分，不自动恢复数据库（VT-16、VT-18） |
+| 7 收尾 3X-UI | 重启面板，等待服务/API 恢复并核对订阅监听及本机订阅；准备并原子发布 handoff；撤销并证实安装 token 失效；发布 `deploy.conf`；删除 `install-result.env` 和原输入文件，清除不再需要的秘密 | 订阅读回在撤销 token 前完成；handoff 写失败不能先删唯一凭据来源。成功后 token、安装结果和输入文件均不残留（VT-17）；部署记录不等于 Tunnel 已就绪 |
+| 8 Tunnel | 固定摘要核对 cloudflared，安装二进制、root 0600 token、服务单元；`daemon-reload` 后核对已加载属性；启用并启动，按第 18 节等 `/ready` 和有效路由 | M3 的真实连接验证独立；假 token 超时必须返回 1，保留部署后状态供只读检查和清理，不回滚 3X-UI（VT-53） |
+| 9 检查 | 执行完整 `check`，报告其退出码；0 时提示管理员按 FR-06 开放 443/tcp、从新 SSH 会话确认并做外部验收 | 脚本不调用 `vps-hardening ports`、不改 UFW。最终检查失败返回 1，配置仍在 |
+
+面板重启等待上限 60 秒，轮询间隔 2 秒，每次请求有独立超时且不超过剩余总期限；这些是本草案的操作上限。观察超时不等于服务已恢复，也不自动重复重启。后续 NFR-06 的业务中断仍按 VT-92 的 10 秒判据，不能拿 60 秒等待上限放宽它。
+
+M2 的开发阶段执行到第 7 步后以 1 报告 Tunnel 尚未实现，符合 VT-70 的阶段基线；输入已按 VT-17 消费，尚未落盘的 Tunnel token 随进程退出丢弃。这个阶段版本不能用于完整首次部署，不提供从中间步骤恢复执行的承诺。完整 M3 流程在同一次调用中继续把内存 token 写入第 8 步的专用文件。
+
+失败提示至少说明：最后确认完成的步骤、当前失败步骤、是否已安装/写入、写入结果已知或未知、仍保留哪些受保护文件、适用清理或恢复路径。第 3 步之后普通失败沿用上游的人工清理：保留或恢复 tuning drop-in，卸载 x-ui，停止并清理本工具的 cloudflared 文件和 token，再清理部署目录；确认预检可通过且 tuning 严格验证通过后重新部署。此流程在 M2 验证；本文没有执行清理，也不授权将其用于已有业务主机。
+
+### 16.2 备份与原机恢复（M4）
+
+**备份契约。** 输入是当前固定版本、数据库路径和管理员指定的 root 0700 私有输出目录。使用 SQLite 在线备份接口（`.backup`）取得一致副本，不直接复制正在写入的主数据库文件，也不把一组不同时点的 DB/WAL/SHM 当作备份。备份文件暂以 0600 创建，备份成功后只读运行 `PRAGMA integrity_check`，必须只返回 `ok`；记录版本、时间、大小、SHA-256 和属主权限，再改名为最终文件。失败保留原主库，不发布标为成功的副本。
+
+备份包含面板密码相关数据、密钥、UUID、订阅 ID 等，不能进入测试归档或仓库；由管理员取到 VPS 外加密保存。Tunnel token 单独保管或重新取得，不把它、handoff 和数据库打进普通诊断包。VT-85 的逐表摘要比较须针对一致的逻辑时点：测试期间冻结夹具的业务变更，单独记录已知后台流量计数变化；不能拿备份完成后的任意活库摘要证明或否定快照一致性。具体对照方法随 M4 补齐，不能仅凭 `integrity_check=ok` 宣称业务数据完整。
+
+**恢复顺序。**
+
+1. 核对备份版本、摘要、完整性、来源和权限；版本不匹配时停止，不能靠启动新版程序迁移后再声称恢复原样。
+2. 停止 cloudflared，避免恢复期间对外提供旧/中间订阅；停止 x-ui，确认其管理的 Xray 及其他写者均已退出，防止重启或自动入口同时写库。
+3. 在数据库目录之外的管理员私有恢复目录保存当前 DB、存在的 `-wal`、`-shm` 和必要文件元数据；不放在 x-ui 会清理的 `.x-ui-backup-*` 目录。保存现状用于失败分析，不把这组文件标为已经验证的在线备份。
+4. 确认没有写者后移走原 DB 及其侧文件；不能把旧 `-wal`、`-shm` 留给新数据库。把经过验证的备份以临时文件放到目标文件系统，设置 root 所有、0600，目录权限按第 4 节；验证后同文件系统改名为 `x-ui.db`，在没有旧侧文件的条件下再次只读核验完整性。失败保持服务停止，原现场仍在受保护恢复目录。
+5. 启动 x-ui，核对版本、文件摘要、回环监听、入站/使用者和订阅内容，再执行 `check`。此时未启动 Tunnel 的项预期失败并逐项列出，不能把它们改成 PASS。局部恢复验证通过后启动 cloudflared，再运行完整检查与客户端验证。
+
+恢复是文档操作，没有自动回滚承诺。任何失败都先确认写者已停止，再由管理员选择重试恢复或使用保留的现场；不把旧 WAL 拼回已经启动过的新主库。文件替换成功不代表服务和业务恢复成功。
+
+### 16.3 迁移、升级和回退（M2 分支；M3、M4 完成）
+
+`deploy --migrate` 复用第 1～4 步的预检、版本和安装核对，但不执行第 6、7 步的业务写入、不调用设置/入站/客户端 API、不生成业务密钥和 handoff。安装器本身会初始化空库并启动 x-ui，这是安装行为；核对后停止并禁用新机 x-ui，在数据库恢复前不让它因重启继续运行。它不通过 `setting -listenIP` 修改待替换的空库；恢复后的面板监听按备份和检查核对。
+
+cloudflared 的二进制、token 和单元安装到位，执行 `daemon-reload`，但**不启用、不启动新机连接器**。发布 `mode=migrate` 的部署记录，保存新 `node_ip`，确认 token 文件后删除输入文件；新装临时 `install-result.env` 在服务停止后删除，其空库将在恢复时整体移走。安装准备返回 0 的条件是两种固定版本文件、权限、单元及部署记录符合，两个服务均保持停止且新机连接器未启用；不运行完整 `check` 的通过条件来冒充已迁移。M3 以前未完成 cloudflared 安装的阶段版本仍返回 1。
+
+后续由管理员按文档执行：
+
+1. 在新机复用第 16.2 节的备份核对、停写者、移走旧库及侧文件、替换和完整性检查，以及 x-ui 的恢复验证；**不执行该节原机恢复的 cloudflared 启动**。保留原订阅路径、订阅 ID 和使用者；启用并启动 x-ui，在面板把分享地址改为新机 IPv4，核对回环订阅及部署记录。恢复/改地址未成功不得切换 Tunnel，切换只在下一步执行。
+2. **先停止旧机 cloudflared，再启用并启动新机 cloudflared**，用同一 Tunnel 接入，避免同一订阅随机返回新旧节点地址；订阅主机名和 DNS 不因此更改。怀疑旧机被入侵时先在授权范围内轮换 token；失效旧 token 与关闭已经建立的旧连接分别核实，不能只保存新文件就认为旧连接已断。
+3. 按 FR-06 开放新机 443/tcp 并确认，执行完整 `check`、经 Tunnel 的订阅和客户端验证。失败时保持单一连接器，是否切回旧机由管理员决定，先检查旧机是否仍可信。
+
+3X-UI 升级和回退不运行 `deploy` 绕过“全新安装”检查。升级先做第 16.2 节备份、按 FR-10 评估新版本并固定相应摘要。**原机回退必须依次停止 x-ui → 按旧版固定摘要重装（安装器可能自动启动）→ 再停止 x-ui → 恢复旧备份并处理侧文件 → 启动 → 检查**，不能省掉第二次停止；Tunnel 在恢复期间停止，验证后再接入。新机回退沿用迁移流程。cloudflared 升级只替换已核对的二进制并重启本服务，失败换回原版本并重新检查，不改 x-ui 或 REALITY。起止版本沿用验证计划 VO-4；此处没有批准新的版本。
+
+## 17. REALITY 的 SNI 转发边界（M2）
+
+第 4.2 节的字段检查是静态配置证据；本节规定实际流量应当跨过哪条边界，不以静态 PASS 代替 VT-20～VT-29。
+
+| 位置 | 固定契约 | 必须观察的结果 |
+|---|---|---|
+| REALITY 入站 | VLESS、443/tcp、RAW/TCP、Vision，订阅给节点 IPv4；`serverNames` 仅 target；REALITY 的 `target` 为 `127.0.0.1:20443` | 已认证客户端的代理请求不受“只能到 target”限制，仍按 REALITY 入站的业务路由处理 |
+| 回环转发入站 | 协议 `tunnel`，仅监听 `127.0.0.1:20443`；原目的地址为占位 IP `127.0.0.1`、端口 443；嗅探启用，`destOverride` 仅 `tls`，`routeOnly=false`、`metadataOnly=false` | 只有解析到 SNI 才以该域名替换目的地址；不得把原目的地址写成 target 域名或加入 HTTP 嗅探 |
+| 模板规则 1、2 | 第一条仅匹配转发 tag 和 `full:<target>` → `direct`；紧邻第二条兜住该 tag 的所有其他连接 → `blocked` | 错误 SNI、无 SNI、非 TLS 的连接不穿过转发入站的外连边界；HTTP `Host: target` 不能使明文请求放行 |
+| 模板规则 3、4 | 仅 REALITY tag 的 `geosite:cn`、`geoip:cn` → `blocked`，随后保留模板原规则；`domainStrategy=AsIs` | 域名规则不等于解析后的 IP 分类；`geoip:cn` 对域名不补做解析，不修改这一已批准取舍 |
+| direct 出站 | 保留固定模板的私有地址 `finalRules` | 占位 IP 的兜底防护仍在；它不能替代规则 2 对其他域名的拦截 |
+
+配置模板、数据库入站和 **3X-UI 最终生成并应用的 Xray 配置**分别核对：实际 tag、规则次序、监听、sniffing、REALITY target 和出站均一致。生产 `check` 的来源不扩展为保存一份含私钥的生成配置；读取生成配置及完整比对由隔离测试驱动执行，秘密不进入归档。
+
+验收的三处证据沿用验证计划第 4.4 节：转发到替身方向的抓包连接摘要、Xray 访问日志、替身的连接记录；同时记录客户端结果。负面用例不能只凭 TLS 失败或客户端没有内容通过。正面用例证明流量确实到达 target，包含大 ClientHello、跨 TLS 记录及慢速分段；VT-27 每种 20 次，产品偶发失败不以重跑覆盖。失败时沿用方案 SR-3 的决定流程，由用户接受代价或评审替代方案，不自动引入 nginx。
+
+该边界只根据 ClientHello 的 SNI 控制去向，不解密 TLS，不检查内层 Host、HTTP/2 `:authority` 或 URL。target 若按内层权威交叉路由，仍可能返回别的站点；`target-check` 和 VT-28 能发现样本中的交叉路由，干净结果不能证明隔离，也不能代替管理员按需求第 11.5 节核实站点归属与共享 CDN 情况。只放行域名不等于固定目标 IP，target 的 DNS 地址可变化；本文不增加 DNS 固定、地址轮换或抗封锁收益承诺。
+
+## 18. Tunnel 服务与生效状态（M3）
+
+### 18.1 单元、凭据和监听
+
+本仓库单元名为 `vps-proxy-setup-cloudflared.service`，安装位置见第 2.8 节。以下是待实现的单元字段契约，不是本次已安装的配置：
+
+| 字段 | 取值与理由 |
+|---|---|
+| `Type` | `simple`；进程启动与 Tunnel 就绪分开判定，服务 active 不等于 `/ready` 通过 |
+| `Wants`、`After` | `network-online.target`；不设置与 x-ui 的 `BindsTo`、`PartOf` 或共同重启关系，Tunnel 停止不影响 REALITY |
+| `DynamicUser` | `yes`；不固定 UID，不以 root 运行，也不使源 token 文件对动态 UID 可读 |
+| `LoadCredential` | `tunnel-token:/etc/vps-proxy-setup/tunnel-token`；由 systemd 以服务身份可读的只读凭据副本提供，源文件仍为 root 0600 |
+| `ExecStart` | `/usr/local/bin/cloudflared tunnel --no-autoupdate --metrics 127.0.0.1:20241 run --token-file ${CREDENTIALS_DIRECTORY}/tunnel-token`；只有凭据路径进入 argv，不传 token 值、不传 Tunnel ID |
+| `Restart`、`RestartSec` | `on-failure`、`5s`；重启策略不改变 deploy 的就绪期限或退出码 |
+| `WantedBy` | `multi-user.target`；首次部署启用，迁移准备不启用 |
+
+不提供 `EnvironmentFile`，不通过环境传入 `TUNNEL_TOKEN`、配置文件路径或 metrics 覆盖。固定 cloudflared 的 `TUNNEL_TOKEN` 优先于 `--token-file`，因此实际环境不能含该值；检查只判定是否存在，不输出内容。`CREDENTIALS_DIRECTORY` 是 systemd 提供的路径，不是令牌。也不运行 `cloudflared service install`，不创建更新 timer 或账户证书。DynamicUser 的实际权限和服务行为在 M3 验证，不因 systemd 文档支持就记为运行通过。
+
+### 18.2 三层检查与就绪
+
+| 层次 | 数据来源 | 判据及不能替代的层次 |
+|---|---|---|
+| 磁盘配置 | 单元文件摘要、drop-in 路径/内容、程序摘要、token 文件属性 | 文件符合只是下一次加载的输入；本仓库单元不允许未识别的有效覆盖 |
+| systemd 已加载配置 | `systemctl show` 的 `FragmentPath`、`DropInPaths`、`NeedDaemonReload`、`ExecStart`、`DynamicUser`、`LoadCredential`、`Environment`、`EnvironmentFiles` | 必须为本仓库单元和预期字段，`NeedDaemonReload=no`。只执行 `daemon-reload` 不能证明当前进程换用了新命令 |
+| 当前进程与运行接口 | `MainPID`、对应 `/proc/<pid>/exe`、`cmdline`、UID、必要环境变量的存在性，`ss`，`/ready`、`/config` | PID 非零且读取前后仍属于该单元，实际程序、完整参数、非零 UID 和凭据路径符合；UID 不跨运行固定。metrics 只监听回环且归属该进程。竞争、读不到或状态变化时不能给 PASS，不打印原始 argv/env |
+
+`cfd.unit` 报告前两层的偏差；`cfd.service` 报告停止、禁用、PID/身份/参数偏差；监听、就绪、路由仍分别报告。M3 注入覆盖“磁盘改了但未 reload”“reload 后没有 restart、旧 PID 仍运行”“实际参数或身份不符”，不能只测试当前磁盘文本。动态凭据的路径要与该 PID 的 systemd 凭据目录对应；不读取 token 内容来做健康检查。Token 轮换由服务重启加载，静态文件正确不能证明活跃连接已使用新 token。
+
+首次启动后，`deploy` 最多等 120 秒，每 2 秒查询一次 `/ready`，单次上限 5 秒且服从剩余期限；这是设计上限，不是服务保证。就绪要求 HTTP 200 且 `readyConnections` 大于 0，之后读取 `/config` 按第 4.2 节核对有效路由。超时返回 1、原因归为 Tunnel 未就绪；服务仍按既定策略运行，配置保留供检查。测试 token 不能连到真实 Tunnel，VT-53 预期 `cfd.ready`、`cfd.routes` 为 FAIL，其他项仍按实际判定；不模拟接口来声称真实就绪。
+
+### 18.3 远程路由、边缘证书与待定事项
+
+唯一公开路由是 `sub_host` → `http://127.0.0.1:2096`，没有 path 限制和 Host 重写，后接拒绝兜底。`/config` 是 cloudflared 返回的有效配置；固定源码会显式输出空 `hostname`、空 `httpHostHeader` 和空 path，所以检查按类型和值判断，不要求这些字段缺席。具体判据以第 4.2 节 `cfd.routes` 为准，真实控制台兜底及私有网络路由的可见范围仍为 DO-4。
+
+Cloudflare 的 Universal SSL 在完整接入 Zone 时覆盖域名本身和一级子域名，不由“输入有三个标签”单独证明；部署输入也不知道 Zone 的实际边界。管理员须在 VPS 外核实该订阅主机名的证书覆盖和生效证书，M3 从外部核验证书链及主机名（[Universal SSL 限制](https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/#full-setup)，2026-10-30 核对）。Cloudflare 免费版 Bot Fight Mode 不能用 WAF Skip 对单个主机名绕过；不能把“配置 Skip”写成它的解决步骤（[Bot Fight Mode 限制](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/#limitations)，同日核对）。实际启用的挑战功能、对其他主机名的影响和所需调整由管理员在账户中确认，归 DO-6；本设计不替用户选择 Zone 范围的开关，也不要求向 VPS 提供 Cloudflare API Token。
+
+VO-7 未确定前不操作 Cloudflare 路由、DNS、证书或测试 VPS；VO-5 的三个客户端平台仍待用户决定。CI 的假 token、模拟 `/config` 解析以及本机订阅测试分别只证明相应层次，不能关闭这两个待决事项。
+
+## 19. 测试接口与注入接缝
+
+沿用第 7 节模块和第 9 节运行器，不新增生产故障参数、环境变量后门、通用插件系统或持久化部署状态机。接缝只隔离确实需要观察/替换的进程、文件、API 和服务边界；正常入口固定路径和版本，测试运行于自己的 VM 覆盖层。
+
+| 边界 | 最小接口契约与注入方式 | 用例及阶段 |
+|---|---|---|
+| 安装器调用与安装后核对 | 安装动作返回退出状态和受保护日志位置；文件核对是独立的下一步。测试驱动加载模块，真实运行安装动作，返回后替换一个已装文件，再调用原核对动作；不把跳过校验的开关放进 `deploy`。另有不注入的完整入口测试，防止测试专用路径替代产品流程 | VT-12、VT-13，M2；DO-10 的接缝在此定义，运行实现仍待核实 |
+| 第 4 步与第 5 步之间 | 相邻阶段函数可由隔离客体驱动顺序调用；驱动在边界用真实 API 增加入站/用户或改变订阅，之后运行真实只读 fresh 检查，前后逐表摘要比较 | VT-15，M2；驱动的修改与被测拒绝路径的修改分别记录 |
+| API 传输与业务操作 | 部署模块的请求函数接受方法、固定相对路径、请求体的私有输入和响应的私有输出，返回传输状态、HTTP 状态、解析状态；业务函数决定语义，不读原始 stderr 判成败。测试中替换函数使第二个新增失败、请求提交后丢失响应、token 删除响应丢失；生产不接受外部 API base URL | VT-16～VT-18、VT-17 撤销核对，M2；实际 API 正常流程另用固定版本验证 |
+| 设置读取与判定 | 第 4.1 节一次只读快照转为不含秘密的固定字段；纯判定逻辑只接受这些值。测试可传入畸形/缺字段快照，但不能代替真实 SQLite 的 VT-72、VT-75 | VT-71～VT-76，M1 起；服务状态变化和侧文件竞态纳入 DO-1 |
+| target 与 HTTP 权威 | 用第 9.2 节替身切换按 SNI/Host 路由、证书信任及分段行为，记录传入 SNI 与 Host/authority；不改变产品的连接目的地址限制 | VT-80、VT-81，M1；VT-23～VT-29，M2 |
+| Xray 路由测试 | POST `/panel/api/xray/routeTest`，表单字段 `domain` 或 `ip`（二者择一）、`port=443`、`network=tcp`、`inboundTag=<实际 tag>`；不依赖协议或用户规则时省略 `protocol`、`email`。在撤销安装 admin token 前执行，之后仍须按 VT-17 撤销，不为生产 `check` 保留它。回国屏蔽须 `success=true`、`obj.matched=true`、`obj.outboundTag=blocked`；转发 target 应命中 `direct`。对照域名允许未命中规则（`matched=false`、空 tag），此时须另核对最终生成配置的首个默认出站确为 `direct`。接口只测试核心选路，不发送业务流量 | VT-30 加收尾后 VT-31 的真实客户端请求，M2；[响应语义源码](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/xray/api.go#L369-L378)，运行结果待 DO-11 |
+| systemd、进程与 `/config` | 解析函数接受脱敏结构化数据，隔离单测覆盖空值/缺字段；真实 VM 通过单元/drop-in、reload/restart 的不同顺序注入。真实 Tunnel 路由偏差只在 VO-7 授权的 VPS 进行 | VT-51～VT-53、VT-71，M3；模拟响应不能计为 `/ready` 或 Cloudflare 验收 |
+| 备份与恢复 | 管理员文档步骤是测试入口，驱动用隔离副本模拟坏摘要、完整性失败、残留侧文件和重装后服务自动启动；不在产品加入 restore 子命令 | VT-85～VT-90，M4；观察点见第 16.2、16.3 节 |
+
+测试程序可以在客体内读取测试秘密生成泄露清单，但只归档脱敏判据、摘要、属主权限和连接摘要；主库、备份、请求响应、token、handoff 不归档。证据收集失败即作业失败，不能拿测试命令退出 0 抵消。VT-71 仍只把同阶段基线中 PASS 的项计入注入覆盖；每项最早里程碑见第 4.2、9.5 节，实际多项连带变化必须记录。所有本节接缝都是设计，仓库当前没有对应函数、夹具或测试执行结果。

@@ -1,10 +1,10 @@
 # vps-proxy-setup
 
-Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.3, solution design v1.0 and verification plan v1.0 approved; detailed design v0.1 (M1) in draft; nothing to install yet.**
+Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.3, solution design v1.0 and verification plan v1.0 approved; detailed design v0.2 in draft, with contracts assigned to milestones; nothing to install yet.**
 
 在已经用 [vps-hardening](https://github.com/alieismy/vps-hardening) 加固的 Debian/Ubuntu VPS 上搭建代理服务，以 3X-UI 为例。
 
-**当前状态：[需求规格说明](docs/requirements.md) v1.3 已批准，[方案设计](docs/solution-design.md) v1.0 已批准，[验证计划](docs/verification-plan.md) v1.0 已批准，[详细设计](docs/detailed-design.md) v0.1 草案待评审；还没有可用的脚本或发行版。**
+**当前状态：[需求规格说明](docs/requirements.md) v1.3 已批准，[方案设计](docs/solution-design.md) v1.0 已批准，[验证计划](docs/verification-plan.md) v1.0 已批准，[详细设计](docs/detailed-design.md) v0.2 草案待评审，各契约按里程碑实现和验证；还没有可用的脚本或发行版。**
 
 ## 与另外两个仓库的关系
 
@@ -54,7 +54,7 @@ v0.4 按需求 U7 增加：
 
 [验证计划](docs/verification-plan.md) v1.0 已批准（需求 U15、D23）：CI 虚拟机用 Debian 13 amd64，在客体内用两个网络命名空间分别放 Mihomo 客户端和 target 替身，FR-02 的负面用例在转发入站的外连侧取三处证据；真实的 Tunnel、真实 target 和三个客户端在测试 VPS 上验收（要另行授权）。之后是详细设计和实现。
 
-[详细设计](docs/detailed-design.md) v0.1 草案覆盖里程碑 M1：命令契约和部署输入的校验规则、`deploy` 的预检、`check` 的全部检查项（只读打开 3X-UI 的数据库，秘密不离开 `sqlite3`）、`target-check`、安装脚本和 M1 的测试框架；`deploy` 预检之后的步骤、规则文本和 cloudflared 的服务单元随 M2、M3 增补。待评审。
+[详细设计](docs/detailed-design.md) v0.2 草案保留并修订 M1 的命令、预检、只读检查、`target-check` 和测试框架；补充 3X-UI API 与凭据生命周期、写入和备份恢复顺序、REALITY SNI 边界、Tunnel 动态用户与生效状态检查、测试注入接缝。实现和验证仍按 M1～M5 推进；规则文本、实际运行行为及待决事项没有被视为完成。新增 shortId 生成来源与已批准上游文字的差异列为 DO-12，等待澄清；DO-7、VO-5、VO-7 仍待用户决定。草案尚未批准，也未开始实现。
 
 ## 许可证
 
