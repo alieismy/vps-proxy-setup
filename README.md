@@ -1,10 +1,10 @@
 # vps-proxy-setup
 
-Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.3, solution design v1.0 and verification plan v1.0 approved; nothing to install yet.**
+Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.3, solution design v1.0 and verification plan v1.0 approved; detailed design v0.1 (M1) in draft; nothing to install yet.**
 
 在已经用 [vps-hardening](https://github.com/alieismy/vps-hardening) 加固的 Debian/Ubuntu VPS 上搭建代理服务，以 3X-UI 为例。
 
-**当前状态：[需求规格说明](docs/requirements.md) v1.3 已批准，[方案设计](docs/solution-design.md) v1.0 已批准，[验证计划](docs/verification-plan.md) v1.0 已批准；还没有可用的脚本或发行版。**
+**当前状态：[需求规格说明](docs/requirements.md) v1.3 已批准，[方案设计](docs/solution-design.md) v1.0 已批准，[验证计划](docs/verification-plan.md) v1.0 已批准，[详细设计](docs/detailed-design.md) v0.1 草案待评审；还没有可用的脚本或发行版。**
 
 ## 与另外两个仓库的关系
 
@@ -53,6 +53,8 @@ v0.4 按需求 U7 增加：
 [方案设计](docs/solution-design.md) v1.0 已批准（需求 U12～U14、D22）：Bash 工具 `vps-proxy-setup`（`deploy`、`check`、`target-check`），经回环地址上的 3X-UI API 写入设置，检查只读；REALITY 的 target 指向 Xray 自己的本机转发入站，它的目的地址是占位的回环 IP，只有嗅探到 target 的 SNI 才改写并转发，不带 SNI 的连接不转发；服务端屏蔽经 REALITY 入站的回国流量；订阅经远程管理的 Cloudflare Tunnel 发布，cloudflared 用固定的程序文件和本仓库的服务单元，以动态用户运行。之后是验证计划、详细设计和实现。测试沿用 vps-hardening 的方式：CI 虚拟机，再加一台测试 VPS。
 
 [验证计划](docs/verification-plan.md) v1.0 已批准（需求 U15、D23）：CI 虚拟机用 Debian 13 amd64，在客体内用两个网络命名空间分别放 Mihomo 客户端和 target 替身，FR-02 的负面用例在转发入站的外连侧取三处证据；真实的 Tunnel、真实 target 和三个客户端在测试 VPS 上验收（要另行授权）。之后是详细设计和实现。
+
+[详细设计](docs/detailed-design.md) v0.1 草案覆盖里程碑 M1：命令契约和部署输入的校验规则、`deploy` 的预检、`check` 的全部检查项（只读打开 3X-UI 的数据库，秘密不离开 `sqlite3`）、`target-check`、安装脚本和 M1 的测试框架；`deploy` 预检之后的步骤、规则文本和 cloudflared 的服务单元随 M2、M3 增补。待评审。
 
 ## 许可证
 
