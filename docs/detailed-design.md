@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | v0.1 草案：覆盖里程碑 M1，即整体的命令契约、部署输入、预检、`check` 的全部检查项、`target-check`、安装脚本、模块划分、实现约束和 M1 的测试框架。`deploy` 预检之后的步骤、规则文本、交给管理员的文件和 cloudflared 的服务单元，在 M2、M3 的版本中增补。待用户评审 |
+| 状态 | v0.1 草案：覆盖里程碑 M1，即整体的命令契约、部署输入、预检、`check` 的全部检查项、`target-check`、安装脚本、模块划分、实现约束和 M1 的测试框架。`deploy` 预检之后的步骤、规则文本、交给管理员的文件和 cloudflared 的服务单元，在 M2、M3 的版本中增补。按 CodeRabbit 对草案的意见，写明 `sub.paths` 不能证明订阅路径是随机生成的（第 4.2、11 节）。待用户评审 |
 | 日期 | 2026-10-30 |
 | 上游 | [需求规格说明 v1.3](requirements.md)（已批准）、[方案设计 v1.0](solution-design.md)（已批准）、[验证计划 v1.0](verification-plan.md)（已批准）；[vps-hardening 详细设计](https://github.com/alieismy/vps-hardening/blob/master/docs/detailed-design.md)的形态和惯例 |
 | 下游 | 实现和测试（从 M1 开始） |
@@ -255,7 +255,7 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 | `sub.cert` | `subCertFile` 或 `subKeyFile` 不为空 | FR-04、D21 | M1 |
 | `sub.domain` | `subDomain` 为空或不是合法的主机名 | FR-04 | M2 |
 | `sub.uri` | `subURI` 不等于 `https://` 加 `subDomain` 加 `subPath`，或者 `subClashURI` 不等于 `https://` 加 `subDomain` 加 `subClashPath`。3X-UI 把这两个值与订阅 ID 直接拼成订阅地址，所以值中要有路径（已核实，第 14 节） | FR-04 | M2 |
-| `sub.paths` | `subPath` 或 `subClashPath` 是默认值（`/sub/`、`/clash/`），或者两个斜杠之间少于 16 个字符（FR-04"订阅路径用初始化时生成的随机值"） | FR-04 | M1 |
+| `sub.paths` | `subPath` 或 `subClashPath` 是默认值（`/sub/`、`/clash/`），或者两个斜杠之间少于 16 个字符。这一项只能排除默认值和过短的路径：设置表中看不出路径是不是初始化时随机生成的，16 个字符以上的自定义路径即使可以猜到也会通过，所以它不证明 FR-04"订阅路径用初始化时生成的随机值"已满足（第 11 节） | FR-04 | M1 |
 | `sub.clash` | `subClashEnable` 或 `subClashEnableRouting` 不为真 | FR-04 | M2 |
 | `sub.rules` | `subClashRules` 与 `share/vps-proxy-setup/clash-rules.yaml` 不是逐字节相同（两边都转成十六进制比较）。M1 中还没有规则文本，这一项为 `SKIP` | FR-04、D13 | M2 |
 | `sub.json` | `subJsonEnable` 不为假 | FR-04 | M1 |
@@ -490,6 +490,7 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 - **x-ui 停止时的读取。** 这时以 `immutable` 打开数据库，SQLite 不检查锁。如果 x-ui 恰好在检查期间启动并写入，快照可能不一致，检查结果可能有误，但不会改动数据库；重新执行一次即可。
 - **结论的范围。** `check` 全部通过只说明检查范围内的配置符合要求，不说明从中国大陆可达，也不说明伪装有效（方案设计第 7.6 节）。
 - **Tunnel 的路由。** `cfd.routes` 只能看到 `/config` 中有的内容。私有网络路由等不在 ingress 中的配置能否从这里看到，在 M3 中核实（DO-4）；看不到时这里记录为限制。
+- **订阅路径的随机性。** `sub.paths` 只排除默认值和过短的路径，不能证明路径是初始化时随机生成的。部署不改订阅路径（`deploy` 只用 3X-UI 初始化时生成的值），之后在面板中改成可猜的值，检查发现不了。
 - **异权威探测。** 结果干净不证明隔离；默认的探测主机名只能发现"按 Host 返回别的内容"的服务器（第 2.7、5 节）。
 - **隐私扫描。** 服务商名称和生产使用的 target 只能在本地用私有清单扫描（第 9.1 节）。
 - **执行所装的程序。** `xui.version` 执行 `/usr/local/x-ui/x-ui -v`。即使这个文件已被替换，它本来就以 root 作为服务运行，检查执行它不扩大它的权限；摘要不符由 `xui.files` 报告。
