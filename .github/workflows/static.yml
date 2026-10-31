@@ -1,0 +1,26 @@
+name: static
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax, assets, line endings, secret patterns and privacy scan
+        run: bash tests/static.sh
+
+      # ShellCheck reports only the files it is given, not the ones it follows
+      # with -x, so every module is listed (detailed design 9.1).
+      - name: ShellCheck 0.11.0
+        run: |
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 -x \
+            bin/vps-proxy-setup lib/vps-proxy-setup/*.sh install.sh \
+            tests/guest/*.sh tests/static.sh tests/privacy-local.sh

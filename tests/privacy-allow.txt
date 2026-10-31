@@ -1,0 +1,35 @@
+# Exceptions to the privacy scan of tests/static.sh (VT-97, detailed design 9.1).
+#
+# domain HOST        a public site; the host and its subdomains are allowed
+# cidr CIDR FILE...  a public standard address block, allowed only in the
+#                    files listed; it is a constant, not a deployment address,
+#                    and allows no other address inside the block
+#
+# Provider names and production targets never go here: listing them would
+# publish them. tests/privacy-local.sh checks those against a private list.
+
+domain github.com
+domain githubusercontent.com
+domain debian.org
+domain cloudflare.com
+domain golang.org
+domain google.com
+domain amazon.com
+domain openai.com
+domain chatgpt.com
+domain anthropic.com
+domain claude.ai
+
+# IPv4 blocks the node_ip validation rejects (detailed design 2.4).
+cidr 0.0.0.0/8 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
+cidr 100.64.0.0/10 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
+cidr 169.254.0.0/16 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
+cidr 172.16.0.0/12 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
+cidr 192.0.0.0/24 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
+cidr 192.168.0.0/16 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
+cidr 198.18.0.0/15 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
+cidr 224.0.0.0/4 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
+cidr 240.0.0.0/4 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
+# IPv6 unique local addresses, excluded from usable IPv6 egress addresses
+# (detailed design 4.2 ipv6.egress).
+cidr fc00::/7 lib/vps-proxy-setup/probe.sh docs/detailed-design.md
