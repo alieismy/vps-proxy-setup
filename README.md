@@ -1,10 +1,10 @@
 # vps-proxy-setup
 
-Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.6, solution design v1.4 and verification plan v1.2 approved; detailed design v0.2 in draft, with contracts assigned to milestones; nothing to install yet.**
+Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.6, solution design v1.4 and verification plan v1.3 approved; detailed design v0.2 in draft, with contracts assigned to milestones; nothing to install yet.**
 
 在已经用 [vps-hardening](https://github.com/alieismy/vps-hardening) 加固的 Debian/Ubuntu VPS 上搭建代理服务，以 3X-UI 为例。
 
-**当前状态：[需求规格说明](docs/requirements.md) v1.6 已批准，[方案设计](docs/solution-design.md) v1.4 已批准，[验证计划](docs/verification-plan.md) v1.2 已批准，[详细设计](docs/detailed-design.md) v0.2 草案待评审，各契约按里程碑实现和验证；还没有可用的脚本或发行版。**
+**当前状态：[需求规格说明](docs/requirements.md) v1.6 已批准，[方案设计](docs/solution-design.md) v1.4 已批准，[验证计划](docs/verification-plan.md) v1.3 已批准，[详细设计](docs/detailed-design.md) v0.2 草案待评审，各契约按里程碑实现和验证；还没有可用的脚本或发行版。**
 
 ## 与另外两个仓库的关系
 
@@ -36,7 +36,7 @@ Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example.
 
 ## 下一步
 
-v1.6（需求 U20、D31）已批准：FR-13 改为目的域名有 IPv6 地址时只走 IPv6，IPv6 不可用或连接失败时连接失败、不改走 IPv4，没有 IPv6 地址时走 IPv4；依据是用户提供的配置样例中的双栈路由和出站设置。方案设计同步为 v1.3；同日按需求 U21、D32 决定 OD-5，方案设计为 v1.4；按需求 U22、D33 批准验证计划 v1.2 和详细设计 DO-14 的取值。
+v1.6（需求 U20、D31）已批准：FR-13 改为目的域名有 IPv6 地址时只走 IPv6，IPv6 不可用或连接失败时连接失败、不改走 IPv4，没有 IPv6 地址时走 IPv4；依据是用户提供的配置样例中的双栈路由和出站设置。方案设计同步为 v1.3；同日按需求 U21、D32 决定 OD-5，方案设计为 v1.4；按需求 U22、D33 批准验证计划 v1.2 和详细设计 DO-14 的取值；按需求 U23、D34 批准验证计划 v1.3。
 
 v1.5（需求 U19、D29、D30）已批准：FR-13 的取值确定——IPv6 不可用或连接失败时改走 IPv4，其余流量保持系统默认，只有 IPv4 的 VPS 不启用、部署照常，是否启用由部署输入明确给出；Xray 核心的修复等 3X-UI 发布自带新核心的版本。方案设计同步为 v1.2。
 
@@ -58,7 +58,7 @@ v0.4 按需求 U7 增加：
 
 [方案设计](docs/solution-design.md) v1.0 已批准（需求 U12～U14、D22）：Bash 工具 `vps-proxy-setup`（`deploy`、`check`、`target-check`），经回环地址上的 3X-UI API 写入设置，检查只读；REALITY 的 target 指向 Xray 自己的本机转发入站，它的目的地址是占位的回环 IP，只有嗅探到 target 的 SNI 才改写并转发，不带 SNI 的连接不转发；服务端屏蔽经 REALITY 入站的回国流量；订阅经远程管理的 Cloudflare Tunnel 发布，cloudflared 用固定的程序文件和本仓库的服务单元，以动态用户运行。之后是验证计划、详细设计和实现。测试沿用 vps-hardening 的方式：CI 虚拟机，再加一台测试 VPS。v1.1 已批准（需求 U17、D25）：按需求 v1.4 修改迁移的令牌、shortId 的生成方式，FR-13 的机制列为 OD-5。v1.2 已批准（需求 U19、D29）：同步 FR-13 的取值，OD-5 的建议改为能在 IPv6 连接失败时改走 IPv4 的机制。v1.3 已批准（需求 U20、D31）：OD-5 的建议改为出站上用 `ForceIPv6v4`，IPv6 失败不改走 IPv4，路由仍为 `AsIs`。v1.4 已批准（需求 U21、D32）：OD-5 决定采用 `ForceIPv6v4`，不采用配置样例，不固定 IPv6 源地址。
 
-[验证计划](docs/verification-plan.md) v1.0 已批准（需求 U15、D23）：CI 虚拟机用 Debian 13 amd64，在客体内用两个网络命名空间分别放 Mihomo 客户端和 target 替身，FR-02 的负面用例在转发入站的外连侧取三处证据；真实的 Tunnel、真实 target 和三个客户端在测试 VPS 上验收（要另行授权）。之后是详细设计和实现。v1.1 已批准（需求 U17、D25）：M5 补充节点不可用时的订阅恢复场景，VT-86 核对 `--migrate` 之后新机连接器未启用，FR-13 的用例列为 VO-8。v1.2 已批准（需求 U22、D33）：补入 FR-13 的用例 VT-32～VT-34（双栈替身、外连隔离，IPv6 失败时确认没有改走 IPv4），关闭 VO-8。
+[验证计划](docs/verification-plan.md) v1.0 已批准（需求 U15、D23）：CI 虚拟机用 Debian 13 amd64，在客体内用两个网络命名空间分别放 Mihomo 客户端和 target 替身，FR-02 的负面用例在转发入站的外连侧取三处证据；真实的 Tunnel、真实 target 和三个客户端在测试 VPS 上验收（要另行授权）。之后是详细设计和实现。v1.1 已批准（需求 U17、D25）：M5 补充节点不可用时的订阅恢复场景，VT-86 核对 `--migrate` 之后新机连接器未启用，FR-13 的用例列为 VO-8。v1.2 已批准（需求 U22、D33）：补入 FR-13 的用例 VT-32～VT-34（双栈替身、外连隔离，IPv6 失败时确认没有改走 IPv4），关闭 VO-8。v1.3 已批准（需求 U23、D34）：按 CodeRabbit 的意见，VT-16 核对各次部署的 shortId 互不相同，VT-18 增加 shortId 生成失败的注入，FR-13 的 VT-32、VT-34 分别判定 TCP 和 UDP。
 
 [详细设计](docs/detailed-design.md) v0.2 草案保留并修订 M1 的命令、预检、只读检查、`target-check` 和测试框架；补充 3X-UI API 与凭据生命周期、写入和备份恢复顺序、REALITY SNI 边界、Tunnel 动态用户与生效状态检查、测试注入接缝。实现和验证仍按 M1～M5 推进；规则文本、实际运行行为及待决事项没有被视为完成。shortId 生成来源与上游文字的差异（DO-12）已按需求 D28 关闭；DO-7、VO-5、VO-7 仍待用户决定。本次补充 IPv4 订阅、监听与双栈出站的分层契约；相关 Xray 核心修复评估列为 DO-13（已选定等 3X-UI 的修复版，需求 D30），OpenAI/Anthropic 的 IPv6 出站策略列为 DO-14（对应需求 FR-13），路由保持 `AsIs`。DO-14 的检查细节已在草案中冻结：部署输入 `ipv6_ai_egress`（`on`/`off`），检查项 `routing.ai-ipv6`、`ipv6.egress`，启用而没有可用的 IPv6 时预检拒绝，可用地址多于一个时警告，这些取值已获批准（需求 D33）；草案的其余部分尚未批准，也未开始实现。
 
