@@ -4,7 +4,8 @@
 |---|---|
 | 状态 | v0.2 草案，待用户评审。保留 v0.1 的 M1 设计，修正命令、检查和注入契约；增加 API 与凭据、部署与恢复顺序、REALITY SNI 边界、Tunnel 服务和测试接缝（第 15～19 节）。本次补充 IPv4 订阅、监听与双栈出站的分层检查契约；核心修复评估为 DO-13，IPv6 出站策略为 DO-14，均未变更已批准基线。各节按 M1～M5 分阶段实现和验证，不把后续设计或真实环境验收设为 M1 的统一前置条件。没有批准、实现或运行验收记录 |
 | 日期 | 2026-10-30 |
-| 上游 | [需求规格说明 v1.3](requirements.md)（已批准）、[方案设计 v1.0](solution-design.md)（已批准）、[验证计划 v1.0](verification-plan.md)（已批准）；[vps-hardening 详细设计](https://github.com/alieismy/vps-hardening/blob/master/docs/detailed-design.md)的形态和惯例 |
+| 本次修订 | 2026-10-31，按需求 U16、D24 补充第 16.3 节的迁移管理前提和停止条件；按需求 v1.4（U17、D25～D28）同步上游：shortId 在 VPS 上生成，关闭 DO-12（第 15.1 节）；第 16.3 节分出默认沿用令牌和轮换两种情形，并补面板端口的核对；第 4.4 节和 DO-14 承接 FR-13；第 6.1 节列出 DO-13 的交付方式。按需求 v1.5（U19、D29、D30）：第 4.4 节和 DO-14 按已定的 FR-13 取值修改，DO-13 选定交付方式 A。按需求 v1.6（U20、D31）：第 4.4 节和 DO-14 改为 IPv6 失败时不改走 IPv4；按需求 U21、D32：方案设计 OD-5 已决定，第 4.4 节和 DO-14 据此收窄。按用户"请按你的意见接着做"冻结 DO-14 的检查细节：部署输入 `ipv6_ai_egress` 和部署记录（第 2.4、2.8 节），预检和检查项 `ipv6.egress`、`routing.ai-ipv6`（第 3、4.2 节），出站和规则的形态（第 4.4 节），写入顺序（第 16.1 节）；对应用例见验证计划 v1.2 的 VT-32～VT-34。用户 2026-10-31 批准验证计划 v1.2 和 DO-14 的取值（需求 U22、D33）。本文整体仍为 v0.2 草案，后续运行验收状态不变 |
+| 上游 | [需求规格说明 v1.6](requirements.md)（已批准）、[方案设计 v1.4](solution-design.md)（已批准）、[验证计划 v1.2](verification-plan.md)（已批准）；[vps-hardening 详细设计](https://github.com/alieismy/vps-hardening/blob/master/docs/detailed-design.md)的形态和惯例 |
 | 下游 | 实现和测试（从 M1 开始） |
 | 深度 | 命令和 API 契约、数据来源、凭据与文件生命周期、写入及恢复顺序、服务边界、检查和测试接缝；不重复上游决策理由，不含实现代码和操作手册 |
 
@@ -27,7 +28,7 @@ v0.2 按方案设计第 10 节、验证计划第 7 节分阶段定义。以下�
 - 第 17、18 节：REALITY SNI 的配置和观测边界、cloudflared 服务字段与动态用户；
 - 第 19 节：复用现有 VT 用例的测试接缝，限定在隔离测试驱动中，不增加生产故障开关。
 
-规则文本及其取舍（DO-9）、实际平台输出与固定摘要（DO-1～DO-3）、API 和服务运行行为、Cloudflare 账户设置及授权仍按第 12 节处理。DO-7、VO-5、VO-7 未获用户决定。完整使用说明、客户端说明和操作命令不在本文件中，分别随 M4、M5 交付。2026-10-30 用户澄清：订阅使用节点 IPv4，双栈主要用于出站规则和路由，关注 `geosite:openai`、`geosite:anthropic`；随后明确选择先定义目标、检查和验证契约，将路由策略变更列为待决，保持已批准基线（第 4.4 节、DO-14）。本文新增细节均为待评审设计，写明接口不等于授权执行接口。
+规则文本及其取舍（DO-9）、实际平台输出与固定摘要（DO-1～DO-3）、API 和服务运行行为、Cloudflare 账户设置及授权仍按第 12 节处理。DO-7、VO-5、VO-7 未获用户决定；DO-13 的交付方式已按需求 D30 选定；DO-14（FR-13 的检查细节）的取值已获用户批准（需求 D33），VO-8 已在验证计划 v1.2 中关闭。完整使用说明、客户端说明和操作命令不在本文件中，分别随 M4、M5 交付。2026-10-30 用户澄清：订阅使用节点 IPv4，双栈主要用于出站规则和路由，关注 `geosite:openai`、`geosite:anthropic`；随后明确选择先定义目标、检查和验证契约，将路由策略变更列为待决，保持已批准基线（第 4.4 节、DO-14）。该澄清 2026-10-31 补记为需求 U18；双栈的出站与路由已作为需求 FR-13 进入 M2（需求 D27），取值已按需求 D29、D31 确定，机制已按方案设计 OD-5 决定（需求 D32）。本文新增细节均为待评审设计，写明接口不等于授权执行接口。
 
 ## 2. 命令契约
 
@@ -101,6 +102,7 @@ M2 的阶段完成按 VT-70 的基线判定，工具仍返回 1 并说明 Tunnel
 | `target` | 必须 | 必须 | 规则同 `sub_host`，但至少两个标签；不能等于 `sub_host` |
 | `remark` | 必须 | 不接受 | 合法的 UTF-8；以两个区域指示符（U+1F1E6～U+1F1FF）组成的国旗开头（D14）；编码后不超过 64 字节；没有控制字符（U+0000～U+001F、U+007F）；首尾不是空格 |
 | `users` | 必须 | 不接受 | 以逗号分隔的代号，1～8 个（D2）；每个代号匹配 `^[a-z0-9][a-z0-9_-]{0,31}$`，所以不会是电子邮件地址（FR-03）；不能重复 |
+| `ipv6_ai_egress` | 必须 | 必须 | `on` 或 `off`，是否启用 FR-13（需求 D29：由部署输入明确给出，不按探测结果自动启用，所以没有默认值）。`on` 时预检 `ipv6.egress` 必须通过（第 3 节）。`--migrate` 时填旧机部署记录中的值：恢复的数据库带着旧机的模板，填错时由 `routing.ai-ipv6` 发现 |
 | `tunnel_token` | 必须 | 必须 | 标准 Base64；解码后是 JSON 对象：`a` 是非空字符串，`t` 是 UUID 格式的字符串，`s` 是标准 Base64 字符串、解码后至少 32 字节，`e` 可有可无（cloudflared 2026.10.5 的令牌格式，第 14 节） |
 
 - 所有输入在主机检查之前校验。不合法时，每个不合法的键输出一行 `[x] 输入 <键>：<原因>`，不回显它的值，以退出码 2 结束，不做主机检查。
@@ -139,8 +141,8 @@ M2 在第 6 步之后加上变更计划和确认：管理员输入 `yes` 才继�
 | 文件 | 写入者 | 读取者 | 内容与生命周期 |
 |---|---|---|---|
 | `target-check/<主机名>` | `target-check` | 预检的 `target.checked`；M2 起写入部署记录 | 第 2.7 节；新的一次覆盖旧的 |
-| `deploy.conf` | `deploy`（M2 起） | `check` 的 `record.consistent` | 部署记录，键值行，按数据解析：`tool_version`、`xui_version`、`cloudflared_version`、`mode`（`deploy` 或 `migrate`）、`deployed_at`、`sub_host`、`node_ip`、`target`、`target_check_time`。第 16 节规定发布时点；它记录预期配置，不证明整个部署或迁移已完成。部署之后不由本工具修改 |
-| `tunnel-token` | `deploy` 第 8 步（M3） | systemd 经 `LoadCredential` 交给 cloudflared | 只有令牌一行；迁移或怀疑泄露时轮换（方案设计第 7.9 节） |
+| `deploy.conf` | `deploy`（M2 起） | `check` 的 `record.consistent` | 部署记录，键值行，按数据解析：`tool_version`、`xui_version`、`cloudflared_version`、`mode`（`deploy` 或 `migrate`）、`deployed_at`、`sub_host`、`node_ip`、`target`、`target_check_time`、`ipv6_ai_egress`。第 16 节规定发布时点；它记录预期配置，不证明整个部署或迁移已完成。部署之后不由本工具修改 |
+| `tunnel-token` | `deploy` 第 8 步（M3） | systemd 经 `LoadCredential` 交给 cloudflared | 只有令牌一行；迁移时默认沿用，怀疑泄露、旧机被入侵或需要隔离无法管理的旧连接器时轮换（方案设计第 7.9 节，需求 D26） |
 | `handoff` | `deploy` 第 7 步（M2） | 管理员 | 交给管理员的文件：面板凭据、`webBasePath`、每人的订阅地址；管理员取走后删除 |
 
 随工具发布的数据文件（第 2.9 节）：`share/vps-proxy-setup/clash-rules.yaml`（规则文本，M2）、`share/vps-proxy-setup/vps-proxy-setup-cloudflared.service`（cloudflared 的服务单元，M3）。部署时服务单元被复制到 `/etc/systemd/system/`；单元名不用上游的 `cloudflared.service`，以免与 `cloudflared service install` 生成的单元相互覆盖。
@@ -189,6 +191,7 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 | `ports.free` | 要用的端口 | 443、面板端口和第 2.8 节中 127.0.0.1 上的端口，任何一个已有 TCP 监听（不论地址）。说明中列出被占用的端口 | VT-01 |
 | `tuning.dropin` | 调优的 drop-in | 不判定不符合：`/etc/systemd/system/x-ui.service.d/90-proxy-vps.conf` 不存在时为警告。之后 vps-tuning 的严格验证需要它（NFR-04，README 的执行顺序） | VT-01 |
 | `target.checked` | target 的核实 | 没有第 2.7 节定义的有效 PASS 记录。结果早于 7 天时为警告：小站点容易改版或迁走（需求第 11.5 节）；记录中已有的警告应一并提示 | VT-01 |
+| `ipv6.egress` | FR-13 的本机前提 | 输入 `ipv6_ai_egress=on` 时按第 4.2 节的同名项判定：没有可用的全局 IPv6 地址或 IPv6 默认路由时不符合，有多个可用地址时为警告。输入为 `off` 时为 `SKIP`。只有 IPv4 的主机填 `off` 即可照常部署（需求 D29） | VT-33 |
 
 `target.checked` 来自 FR-02 的验收"部署记录中有 target 在部署所用的 VPS 上的核实结果"：没有核实过的 target 不进入部署。`--migrate` 同样要求，因为核实要在部署所用的 VPS 上进行。
 
@@ -257,6 +260,15 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 | `routing.rules` | 设置表中没有 `xrayTemplateConfig`（模板仍是默认值）；`routing.domainStrategy` 不是 `AsIs`（不设视同 `AsIs`）；按 3X-UI 生成配置时的做法去掉 `enabled` 为假的规则之后，前四条不依次是方案设计第 7.4 节的规则 1～4：转发入站且域名 `full:<serverNames 的那一项>` → `direct`；转发入站 → `blocked`；REALITY 入站且域名 `geosite:cn` → `blocked`；REALITY 入站且 IP `geoip:cn` → `blocked`。每条只能有这些字段，另外允许 `type` 为 `field` 和 `enabled` 为真；入站按标签匹配，标签取自入站表 | FR-02、D22 | M2 |
 | `routing.outbounds` | 模板的出站中没有正好一个标签为 `direct`、协议为 `freedom` 的，或者没有正好一个标签为 `blocked`、协议为 `blackhole` 的。规则 1～4 的含义依赖这两个出站。`direct` 的 `finalRules` 不检查（方案设计第 7.6 节，验证计划第 3.6 节） | FR-02 | M2 |
 
+**双栈出站（FR-13）**
+
+两项都按部署记录的 `ipv6_ai_egress` 判定；记录缺失或这个值无效时两项为 `SKIP`，不符合由 `record.consistent` 报告。出站和规则的形态见第 4.4 节。
+
+| 编号 | 不符合的条件 | 需求 | 阶段 |
+|---|---|---|---|
+| `routing.ai-ipv6` | （库）记录为 `off`：模板中有标签为 `ai-ipv6` 的出站，或有 `outboundTag` 为 `ai-ipv6` 的规则；都没有时为 `SKIP`，说明未启用。记录为 `on`，有下列任一情形：① 标签为 `ai-ipv6` 的出站不正好一个，或者它不是：只有 `tag`、`protocol`、`settings`、`streamSettings` 四个字段；`protocol` 为 `freedom`；`settings` 只有 `finalRules`，与 `direct` 的 `finalRules` 按 JSON 值相同；`streamSettings` 只有 `sockopt`，`sockopt` 只有 `domainStrategy`，值为 `ForceIPv6v4`。所以 `sendThrough`、`happyEyeballs`、`dialerProxy`、旧名 `settings.domainStrategy` 都不符合（需求 D32）；② 出站列表的第一个不是 `direct`：没有命中规则的连接走第一个出站（第 14 节）；③ 按 `routing.rules` 的做法去掉停用的规则之后，第五条不是：REALITY 入站的标签，`domain` 正好是 `geosite:openai` 和 `geosite:anthropic`（顺序不限），`outboundTag` 为 `ai-ipv6`，字段的限制同 `routing.rules`；或者还有别的规则指向 `ai-ipv6`；④ 模板中有 `dns`：部署不写它，它的 `queryStrategy`、`hosts` 和服务器都会改变这个出站的解析结果，例如 `UseIPv4` 使有 AAAA 的域名也走 IPv4，`UseSystem` 使本机没有 IPv6 路由时改走 IPv4（第 14 节）。自带的 `geosite.dat` 缺少这两个类别时 Xray 拒绝加载配置（第 14 节），443 不再监听，由 `listen.reality` 发现，本项不另读 `geosite.dat` | FR-13、D29、D31、D32 | M2 |
+| `ipv6.egress` | 记录为 `off` 时为 `SKIP`。记录为 `on`：`ip -j -6 addr show` 中没有可用的全局 IPv6 地址，或者 `ip -j -6 route show default` 为空。可用的地址指：所在接口为 UP，`scope` 为 `global`，不在 `fc00::/7` 中，没有 `tentative`、`dadfailed`、`deprecated` 标志；文档地址 `2001:db8::/32` 接受（验证计划第 3.3 节）。可用的地址多于一个（包括临时地址）时为警告：不固定源地址，出口可能随内核的源地址选择变化（需求 D32）。说明中只给地址数量和标志，不输出地址。只读本机配置，不发起连接，不证明 IPv6 业务可达（第 4.4 节）；`ip` 的 JSON 字段在 M2 随 DO-2 核实。预检中的同名项用同一判定（第 3 节） | FR-13、D29、D31、D32 | M2 |
+
 **使用者（库）**
 
 | 编号 | 不符合的条件 | 需求 | 阶段 |
@@ -307,7 +319,7 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 | `absent.acme` | 存在 `/root/.acme.sh`，或者 `PATH` 中有 `acme.sh` | D21、FR-05 | M1 |
 | `absent.cf-credentials` | cloudflared 的账户证书 `cert.pem` 出现在它的默认搜索目录中：`/root/.cloudflared`、`/root/.cloudflare-warp`、`/root/cloudflare-warp`、`/etc/cloudflared`、`/usr/local/etc/cloudflared`（已核实，第 14 节）。这份证书能管理整个账户的 Tunnel，VPS 上只应有令牌（方案设计第 4.5 节） | D21、FR-05 | M1 |
 | `state.perms` | `/etc/vps-proxy-setup` 不属于 root 或权限不是 0700，或者其中有不属于 root、权限不是 0600 的文件（`target-check` 目录本身为 0700）。目录不存在时为 `SKIP`，部署记录的缺失由下一项报告 | NFR-01 | M2 |
-| `record.consistent` | 没有 `deploy.conf` 或解析失败；记录的 `sub_host` 与 `subDomain`、`target` 与 `serverNames` 的那一项、`node_ip` 与 `share_addr` 有不一致的（库）。面板中有意修改了这些值时，部署记录随之按文档更新（M4 的文档） | FR-07 | M2 |
+| `record.consistent` | 没有 `deploy.conf` 或解析失败；`ipv6_ai_egress` 不是 `on` 或 `off`；记录的 `sub_host` 与 `subDomain`、`target` 与 `serverNames` 的那一项、`node_ip` 与 `share_addr` 有不一致的（库）。面板中有意修改了这些值时，部署记录随之按文档更新（M4 的文档） | FR-07 | M2 |
 
 **cloudflared 与 Tunnel**
 
@@ -330,27 +342,36 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 
 ### 4.3 与验证计划的对应
 
-- **VT-70 的 M2 基线。** 部署第 1～7 步之后、还没有 cloudflared 时，`cfd.*` 各项都不符合（`cfd.autoupdate` 因为单元不存在而不符合），其余项通过；`secrets.handoff` 在管理员删除那个文件之前为警告，不影响判定。这与验证计划 VT-70 的"cloudflared 和 Tunnel 的各项 FAIL，其余全部 PASS"一致。
+- **VT-70 的 M2 基线。** 部署第 1～7 步之后、还没有 cloudflared 时，`cfd.*` 各项都不符合（`cfd.autoupdate` 因为单元不存在而不符合），其余项通过；`secrets.handoff` 在管理员删除那个文件之前为警告，不影响判定。这与验证计划 VT-70 的"cloudflared 和 Tunnel 的各项 FAIL，其余全部 PASS"一致。`routing.ai-ipv6`、`ipv6.egress` 在主配置（不启用）上为 `SKIP`，在启用 FR-13 的覆盖层上为 PASS（验证计划 VT-32、VT-33）。
 - **VT-70、VT-53 的 M3 基线。** 测试令牌下只有 `cfd.ready`、`cfd.routes` 不符合。
 - **一种偏差对应几项。** 有的偏差同时由数据库和监听端口两处发现，例如订阅改为监听 `0.0.0.0` 并重启之后，`sub.listen` 和 `listen.sub` 都不符合。VT-71 中"对应的项"指本节为这种偏差列出的全部项，第 9.5 节逐一列出 M1 的注入和预期。
 
 ### 4.4 IPv4 订阅与双栈出站的检查契约
 
-**效力与范围。** 用户已明确订阅仍使用公网 IPv4，IPv6 的主要用途是服务端对特定目的域名选择出站；这不要求客户端具备 IPv6，也不把 IPv6 入站当作 IPv6 出站可用的证明。本次按用户答复保留已批准 `AsIs`、`direct`、前四条安全路由及模板原规则，不创建 `IPv6-OUT`/`IPv4-OUT`，不删除 `direct`，不改全局 DNS、内核路由或防火墙。方案第 7.4 节原有“双栈主机同时监听”的约束仍有效，但只由 `listen.reality` 检查，不代表已实现 AI 域名的 IPv6 出站。
+**效力与范围。** 需求 v1.4 已把双栈的出站与路由列为 FR-13（P1，M2，需求 D27），取值已按需求 D29、D31 确定，机制已按方案设计 OD-5 决定（需求 D32）；本节的出站部分是 FR-13 的检查和验证契约，检查细节已冻结（DO-14，需求 D33）。用户已明确订阅仍使用公网 IPv4，IPv6 的主要用途是服务端对特定目的域名选择出站；这不要求客户端具备 IPv6，也不把 IPv6 入站当作 IPv6 出站可用的证明。本次按用户答复保留已批准 `AsIs`、`direct`、前四条安全路由及模板原规则，不创建 `IPv6-OUT`/`IPv4-OUT`，不删除 `direct`，不改全局 DNS、内核路由或防火墙。方案第 7.4 节原有“双栈主机同时监听”的约束仍有效，但只由 `listen.reality` 检查，不代表已实现 AI 域名的 IPv6 出站。
 
 | 层次 | 输入和数据来源 | 判定、输出与证据边界 |
 |---|---|---|
 | 订阅入口 | 输入 `node_ip`；数据库 `share_addr`；隔离测试取得的最终订阅 | 两类主机均发布同一公网 IPv4 字面量；沿用 `reality.share` 与 VT-22。不能因发现 IPv6 而自动把订阅改为 IPv6 |
 | 本机监听 | 按地址族读取 `ss`；IPv6 socket 的 `v6only`；本机已配置的公网 IPv6 地址 | 按 `listen.reality` 判定。只有回环/链路本地 IPv6 不算公网双栈；IPv4-only 主机不因缺 IPv6 监听失败；已配置公网 IPv6 但没有默认路由不能当作 IPv4-only 来豁免监听。检查不发起新的 TCP 探测，不以全局 `bindv6only` 默认值代替现有 socket 的属性 |
-| 出站本机前提 | `ip` 的地址、接口状态和 IPv6 路由；待 DO-14 冻结的出站配置选择 | 只能描述“具备本机配置前提”或“前提缺失”，不能标为业务可达。IPv4-only 是受支持场景，不能仅因缺少 IPv6 地址/路由拒绝部署。IPv6 本机前提缺失时的失败、告警或允许的 IPv4 回退条件均待 DO-14 确定；本版不启用候选 IPv6 出站，也不自动改写配置。启用条件、输入/记录归属与检查编号在 DO-14 冻结，本版不新增部署输入 |
-| 出站配置与顺序（待 DO-14） | 第 4.1 节一次数据库快照中的模板、真实入站 tag；配套 geosite 资产的类别核验；测试侧最终生成配置 | 检查选定模式下的出站协议、地址族策略、域名集合、规则先后及 REALITY tag 限定；核对 geosite 资产中存在所需类别，不把类别名当作永久固定的域名清单。错误 tag、漏规则、错误策略或被前置规则遮蔽都不能通过。新增 Freedom 出站必须明确保留私有地址保护，数据库字段、核心兼容迁移及最终生效表示分别核对。安全规则优先，转发入站仍只到 `direct` 或 `blocked`，不能落入 AI 分流。批准前不把候选项加入现行 VT-70 的“全部 PASS”基线，也不报告 IPv6 分流已配置 |
+| 出站本机前提 | `ip` 的地址、接口状态和 IPv6 路由；部署输入和部署记录的 `ipv6_ai_egress` | 由 `ipv6.egress` 判定（第 3、4.2 节），只能描述“具备本机配置前提”或“前提缺失”，不能标为业务可达。IPv4-only 是受支持场景：按需求 D29 不启用 FR-13（输入 `off`），部署照常，不因缺少 IPv6 地址/路由拒绝部署。是否启用由部署输入明确给出，不按探测结果自动启用；未启用时两项报告 SKIP 并说明原因。启用后目的域名有 IPv6 地址、但 IPv6 不可用或连接失败时，连接失败，不改走 IPv4（D31）；所以输入 `on` 而本机没有可用的 IPv6 时预检拒绝，部署之后失去 IPv6 时检查报告 FAIL，因为这时有 IPv6 地址的目的域名全部连接失败。按需求 D32 不固定 IPv6 源地址：可用的全局地址多于一个（包括临时地址）时出口可能变化，检查报告 WARN。部署和检查都不自动改写配置 |
+| 出站配置与顺序 | 第 4.1 节一次数据库快照中的模板、真实入站 tag；部署时用自带 Xray 核验类别（第 16.1 节）；测试侧最终生成配置 | 由 `routing.ai-ipv6` 判定出站协议、地址族策略、域名集合、规则先后及 REALITY tag 限定；不把类别名当作永久固定的域名清单，类别存在由部署前的核验和 Xray 加载配置保证。错误 tag、漏规则、错误策略或被前置规则遮蔽都不能通过。新增 Freedom 出站的 `finalRules` 与 `direct` 相同，保留私有地址保护；旧名 `settings.domainStrategy` 会被核心迁移到 `sockopt`（第 14 节），检查只接受新位置，最终生效表示由隔离测试核对（第 17 节）。安全规则优先，转发入站仍只到 `direct` 或 `blocked`，不能落入 AI 分流。只有记录为启用时，这两项才进入 PASS 基线（第 4.3 节） |
 | 实际出站 | 隔离 DNS/双栈替身、客户端结果、两种地址族的外连观测与替身记录 | 必须观察实际目的/源地址族及响应；路由测试返回出站 tag、出现 AAAA、存在默认路由、监听 `[::]` 均不足以证明 IPv6 出站成功。生产 `check` 不访问 OpenAI/Anthropic 来作探测，真实服务可用性留给获授权的测试 VPS 验收 |
 
-**参考材料及不可直接迁移的部分。** 用户提供的本地配置记录“3X-UI-Xray设置”以 `geosite:openai`、`geosite:anthropic` 与 `ip=::/0`、REALITY tag 联合匹配到 `IPv6-OUT`；出站使用 `ForceIPv6`，其后有 IPv4 兜底，整体路由为 `IPOnDemand`。公开文档只记录这些规则语义，不复制原文件的路径、主机标识、真实地址、凭据或历史例外清单。该记录是设计参考，不是本仓库的运行证据。
+**出站和规则的形态（DO-14）。** 输入为 `on` 时，第 16.1 节第 6 步在写前四条规则的同一次模板写入中加上：
 
-固定核心的源码语义见第 14 节：同条规则的域名和 IP 条件同时满足才匹配；`IPOnDemand` 让 IP 条件按需解析域名，不检测 IPv6 连通性。它也会扩大当前 `geoip:cn` 对域名的匹配范围，改变 D22 已批准的取舍。在候选 `IPOnDemand` 下，域名没有可匹配的 AAAA 时可能不命中 IPv6 规则、继续走后面的 IPv4 规则；这是选路阶段的兜底。`ForceIPv6` 无 IPv4 自动回退；命中该出站后连接失败，不会继续尝试下一条 IPv4 路由。`UseIPv4` 与 `sendThrough=0.0.0.0` 也不能单独保证“所有其他请求强制 IPv4”，尤其要核对直接携带 IPv6 字面量和解析失败的路径。因此 IPv4-only 行为、无 AAAA、IPv6 路由缺失/中断、字面量目的地址、例外集合及回退条件一起列入 DO-14，不从参考记录推定答案。
+| 对象 | 内容与位置 |
+|---|---|
+| 出站 | `tag` 为 `ai-ipv6`（本工具的固定值），`protocol` 为 `freedom`；`settings` 只有 `finalRules`，值与 `direct` 的相同；`streamSettings.sockopt` 只有 `domainStrategy`，值为 `ForceIPv6v4`。追加在出站列表末尾，`direct` 仍是第一个 |
+| 规则 | `type` 为 `field`，`inboundTag` 为 REALITY 入站的标签，`domain` 为 `geosite:openai`、`geosite:anthropic`，`outboundTag` 为 `ai-ipv6`。放在规则 4 之后、模板原有规则之前，即第五条 |
 
-**分阶段验证。** M1 仍只完成既定骨架及不依赖部署的项；`ss` 地址族和 `v6only` 的真实输出在 M2 核实。M2 的 VT-71 覆盖 IPv4-only、双栈但缺一族监听、单个双栈 socket，以及 IPv4/IPv6 通配 socket 各自存在但 `v6only` 缺失的情况（仍通过）；只有依靠 IPv6 socket 满足 IPv4 要求时，`v6only=1` 或未知才据此 FAIL，配合 VT-60～VT-62；M5 保留已有双地址族外部扫描。DO-14 批准前，出站矩阵只是验证设计：IPv4-only、A-only、AAAA-only、A+AAAA、解析失败、IPv6 不可达、直接 IPv4/IPv6 字面量、AI/非 AI 域名、域名解析到国内/私有地址及转发入站隔离。用隔离 DNS 和双栈替身控制条件，不新增平台矩阵、不依赖真实 AI 账户。DO-14 关闭时将所选行为、期望地址族/失败或回退结果及用例编号同步到验证计划，再作为 M2 的验收项；不能直接套用参考材料的历史连通结论。
+目的为 IP 字面量的连接不匹配这条规则，按其余规则处理，大多走 `direct`；转发入站的连接先由规则 1、2 处理，到不了这条规则。输入为 `off` 时模板中没有这个出站和这条规则。
+
+**参考材料及不可直接迁移的部分。** 用户提供的本地配置记录“3X-UI-Xray设置”以 `geosite:openai`、`geosite:anthropic` 与 `ip=::/0`、REALITY tag 联合匹配到 `IPv6-OUT`；出站使用 `ForceIPv6`，其后有 IPv4 兜底，整体路由为 `IPOnDemand`。公开文档只记录这些规则语义，不复制原文件的路径、主机标识、真实地址、凭据或历史例外清单。该记录是设计参考，不是本仓库的运行证据；需求 D27 只把它作为 FR-13 的参考，D22 对其余参考设置的退役不变。需求 U20 指定的本地配置样例中，双栈路由和出站的语义与此一致，另用 `sendThrough` 固定两个出站的源地址，并把其余流量限定在 IPv4 出站；按需求 D31 只参考其中的双栈路由和出站设置，同样不复制原文件的地址和标识。
+
+固定核心的源码语义见第 14 节：同条规则的域名和 IP 条件同时满足才匹配；`IPOnDemand` 让 IP 条件按需解析域名，不检测 IPv6 连通性。它也会扩大当前 `geoip:cn` 对域名的匹配范围，改变 D22 已批准的取舍。在候选 `IPOnDemand` 下，域名没有可匹配的 AAAA 时可能不命中 IPv6 规则、继续走后面的 IPv4 规则；这是选路阶段的兜底。`ForceIPv6` 无 IPv4 自动回退；命中该出站后连接失败，不会继续尝试下一条 IPv4 路由。`UseIPv4` 与 `sendThrough=0.0.0.0` 也不能单独保证“所有其他请求强制 IPv4”，尤其要核对直接携带 IPv6 字面量和解析失败的路径。因此 IPv4-only 行为、无 AAAA、IPv6 路由缺失/中断、字面量目的地址、例外集合及回退条件一起列入 DO-14，不从参考记录推定答案。需求 D29、D31 已确定：只有 IPv4 的主机不启用；目的域名有 IPv6 地址时只走 IPv6，失败不改走 IPv4，没有 IPv6 地址时走 IPv4，与参考记录的选路效果相同。方案设计 v1.4 的 OD-5 据此决定（需求 D32）：新增出站的 `sockopt` 用 `domainStrategy: ForceIPv6v4`，不固定源地址，路由保持 `AsIs`，不改变 `geoip:cn` 的匹配范围；实际行为在 M2 验证。
+
+**分阶段验证。** M1 仍只完成既定骨架及不依赖部署的项；`ss` 地址族和 `v6only` 的真实输出在 M2 核实。M2 的 VT-71 覆盖 IPv4-only、双栈但缺一族监听、单个双栈 socket，以及 IPv4/IPv6 通配 socket 各自存在但 `v6only` 缺失的情况（仍通过）；只有依靠 IPv6 socket 满足 IPv4 要求时，`v6only=1` 或未知才据此 FAIL，配合 VT-60～VT-62；M5 保留已有双地址族外部扫描。出站矩阵已写入验证计划 v1.2 的 VT-32～VT-34：IPv4-only（主配置）、A-only、AAAA-only、A+AAAA、解析失败、IPv6 不可用、IPv6 拒绝或丢弃、直接 IPv4/IPv6 字面量、AI/非 AI 域名、AAAA 为私有地址及转发入站隔离。解析到国内地址的 AI 域名按 D22 的取舍不挡，不单列用例。条件由客体的 `/etc/hosts`、双栈替身和外连隔离控制，不新增平台矩阵、不依赖真实 AI 账户；两个检查项随 VT-32、VT-33 和 VT-71 验证。不能直接套用参考材料的历史连通结论。
 
 ## 5. target-check 检查项
 
@@ -396,9 +417,17 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 
 3X-UI 仍固定 v3.11.0；当前发布包的 Xray 基线仍为 v26.10.21，不因存在新版本而自动替换。2026-10-29 发布的 v26.10.29 包含 #7238：修复 VLESS 等 `DispatchLink` 入站在 Freedom 的 `finalRules` 拒绝连接时，未能按 `blockDelay` 结束连接的问题。已认证 VLESS 请求一个未先被其他规则拦截、随后被 Freedom 解析为私有地址的域名，可以进入这条路径；Vision 分支仍使用 `DispatchLink`。风险是拒绝连接持续占用资源，不是私有地址放行、未认证 SNI 绕过或已发生资源耗尽（第 14 节）。
 
-包含该修复的核心列为候选，当前候选为 v26.10.29，未批准采用。设计/测试在 M2 核心版本冻结前，用本项目 REALITY + Vision 验证拒绝连接确实结束、客户端保持发送/不关闭的情况、正常公网转发和重启恢复；复用现有 VM 与连接观察接缝，计时判据明确到适用的 `blockDelay` 和容差，不以“closed”日志代替 socket 结束。核对候选的配置/API 兼容、发布资产与摘要；如果变更版本，先同步需求相关约束、方案、验证计划第 3.5 节、本节和 VO-1 的文件摘要，再运行受影响的 VT-16、VT-20～VT-29、VT-71、VT-92。新增的拒绝连接回收用例随 DO-13 评审纳入验证计划，不虚构已有 VT 编号。
+包含该修复的核心列为候选，当前候选为 v26.10.29，未批准采用。评估 3X-UI 的修复版时（需求 D30），设计/测试用本项目 REALITY + Vision 验证拒绝连接确实结束、客户端保持发送/不关闭的情况、正常公网转发和重启恢复；复用现有 VM 与连接观察接缝，计时判据明确到适用的 `blockDelay` 和容差，不以“closed”日志代替 socket 结束。核对候选的配置/API 兼容、发布资产与摘要；如果变更版本，先同步需求相关约束、方案、验证计划第 3.5 节、本节和 VO-1 的文件摘要，再运行受影响的 VT-16、VT-20～VT-29、VT-71、VT-92。新增的拒绝连接回收用例随 DO-13 评审纳入验证计划，不虚构已有 VT 编号。
 
-DO-13 未关闭不阻止 M1 骨架与原固定包的资料取得；若之后换核心，相关摘要与核心行为证据须按新版本重取。未决定版本及验证要求前，不冻结 M2 的核心基线或宣称已解决此问题。
+决定采用候选核心时，交付方式有三种（用户 2026-10-31 选定 A，需求 D30）：
+
+| 方式 | 做法 | 影响 | 建议 |
+|---|---|---|---|
+| A. 等 3X-UI 的修复版 | 3X-UI 发布自带 v26.10.29 或之后核心的版本后，按需求第 11.3 节评估，改固定版本、提交和摘要 | 仍按固定的发布包安装，不偏离 FR-01、NFR-05；发布时间不可控，截至 2026-10-31 最新仍是 v3.11.0 | 采用。等待期间按上文评估风险和验证要求，不阻塞 M1 |
+| B. 面板的"切换 Xray 版本" | 管理员在面板中下载并替换核心 | 下载的文件不在本仓库固定的摘要之内，`xui.files` 的核对随之失效；需求第 10.1 节记录了 v3.11.0 上这项功能的缺陷报告 | 不采用 |
+| C. 部署脚本替换自带的核心 | 部署脚本按本仓库固定的摘要下载候选核心，替换发布包中的 Xray | 偏离 FR-01、NFR-05 按固定发布包安装的约束，要先由用户批准需求变更；重装或升级 3X-UI 时会被发布包的核心覆盖（推断）；`xui.files` 的摘要、VO-1 和升级流程都要改 | 只在风险被证实需要立即处理、又等不到 A 时考虑 |
+
+**已决定（需求 D30）：采用 A。** M1、M2 按固定的 v3.11.0 及其自带的 v26.10.21 实现和验证，不用 B，不做 C，也不宣称已解决 #7238 所述的问题。3X-UI 发布自带修复核心的版本后，按需求第 11.3 节和 FR-10 评估，上文的验证要求在那时执行；改版本时同步需求及下游，相关摘要与核心行为证据按新版本重取。
 
 ## 7. 模块划分
 
@@ -560,9 +589,9 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 | DO-9 | Apple、微软等服务的直连取舍；国内 IP 的 `no-resolve`；规则名称与顺序 | 随 M2 规则文本提交评审，保持 D13 选型；本文不把未写的 YAML 计为完成 | 设计，M2 | 规则定稿并满足 VT-42、VT-44、VT-96；不阻塞 M1 |
 | DO-10 | 安装后摘要偏差的注入实现 | 第 19 节已定义阶段接缝，不需要生产故障开关 | 测试实现，M2 | 设计待本草案评审；VT-12 的真实测试仍未执行 |
 | DO-11 | 路由测试和新增 API 契约的运行核实 | 第 15、19 节按固定源码规定；核对实际 JSON 表示、部分写入、撤销结果和核心选路 | 实现，M2 | VT-15～VT-18、VT-30、VT-31；源码不等于运行通过 |
-| DO-12 | shortId 生成来源与已批准上游不一致 | 第 15.1 节给出证据和候选修订；用户澄清方案第 7.3、7.9 节及 VT-16 后才能选择实现 | 用户/设计，M2 写入前 | 只阻塞依赖 shortId 的写入和验收；不虚构服务端接口，不擅自修改已批准上游 |
-| DO-13 | Xray v26.10.21 的相关修复与核心版本选择 | 第 6.1 节；评估包含 #7238 的版本（当前候选 v26.10.29），不自动升级 | 设计/测试给出证据，用户决定版本；M2 核心冻结前 | 决定保留或替换并记录依据；替换时同步上游、摘要和受影响验证。拒绝连接回收、正常转发与重启证据未取得，不宣称修复通过；不阻塞 M1 |
-| DO-14 | IPv4 订阅下的 IPv6 出站策略及检查契约冻结 | 用户已确认目标及保持基线；第 4.4 节列出 `geosite:openai`、`geosite:anthropic` 的参考意图和 `IPOnDemand`/`AsIs` 差异；解析、规则顺序、出站策略、IPv4-only、失败/回退和字面量行为待定 | 设计提出有边界方案，用户决定；M2 对应路由实现前 | 方案第 7.4、7.6 节、验证计划与本文同时对齐后再新增规则/检查；明确模式输入及记录、geosite 资产证据和测试预期。旧基线通过不能算 IPv6 分流完成；不阻塞 M1 |
+| DO-12 | shortId 生成来源与已批准上游不一致 | 已关闭（需求 D28，2026-10-31）：部署脚本在 VPS 上用 `openssl rand -hex 8` 生成，经 API 写入；方案设计第 7.3、7.4、7.9 节和 VT-16 已同步（第 15.1 节） | 用户，2026-10-31 已决定 | 不再阻塞；生成和传递的运行证据随 VT-16 在 M2 取得 |
+| DO-13 | Xray v26.10.21 的相关修复与核心版本选择 | 已决定（需求 D30，2026-10-31）：采用 A，等 3X-UI 的修复版；M1、M2 保持 v3.11.0 自带的 v26.10.21（第 6.1 节） | 用户，2026-10-31 已决定；修复版的评估随 FR-10 | 不阻塞 M1、M2。修复版出现后按需求第 11.3 节评估，替换时同步上游、摘要和受影响验证；拒绝连接回收、正常转发与重启证据未取得，不宣称修复通过 |
+| DO-14 | IPv4 订阅下的 IPv6 出站策略及检查契约冻结（需求 FR-13） | 已决定（需求 D33，2026-10-31）：部署输入 `ipv6_ai_egress`（`on`/`off`，必须给出）及部署记录（第 2.4、2.8 节）；输入 `on` 而没有可用的 IPv6 时预检拒绝，部署之后为 FAIL，可用地址多于一个时为 WARN（`ipv6.egress`）；出站与规则的形态和检查（第 4.4 节、`routing.ai-ipv6`）；写入前用自带 Xray 核验类别（第 16.1 节）；字面量不匹配规则（第 4.4 节）。用例见验证计划 v1.2 的 VT-32～VT-34（VO-8 关闭） | 用户，2026-10-31 已批准 | 不阻塞 M1。`ip -j` 的字段、`run -test` 的类别核验和实际出站行为在 M2 随 VT-32～VT-34 取得运行证据；旧基线通过不能算 IPv6 分流完成 |
 
 验证计划中仍待用户决定的 VO-5（FR-11 三个客户端的平台）和 VO-7（测试 VPS 的时间、主机和授权范围）都在 M3 之前，不影响 M1。VO-2、VO-3、VO-4、VO-6 继续由验证计划拥有，本文引用，不代为关闭。以上“已核实”仅指证据，“待评审设计”不等于用户批准；没有把任何 DO 或 VO 记为运行通过。
 
@@ -573,17 +602,18 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 | 需求或上游约束 | 本文设计位置 | 验证及阶段/待定 |
 |---|---|---|
 | FR-01 | 第 3、4.2、6、16.1 节，安装前后摘要与回环面板 | VT-10～VT-13；M2，摘要先在 M1 取得（DO-3） |
-| FR-02 | 第 2.4、2.7、4.4、5、15.1、17 节；`reality.*`、`forwarder.settings`、`routing.*` | VT-16、VT-20～VT-29、VT-80、VT-81；M1 target、M2 流量，shortId 待 DO-12；真实 target 在 M5 |
+| FR-02 | 第 2.4、2.7、4.4、5、15.1、17 节；`reality.*`、`forwarder.settings`、`routing.*` | VT-16、VT-20～VT-29、VT-80、VT-81；M1 target、M2 流量；真实 target 在 M5 |
 | FR-03 | 第 2.4 节 `users`、第 4.2 节 `clients.*`、第 15 节 | VT-35～VT-38；M2；停用/重置/删除的业务结果不由数量检查替代 |
 | FR-04 | 第 4.2 节 `sub.*`、第 15.1、15.2、18.3 节 | VT-40～VT-44；M2，规则文本待 DO-9，真实拉取在 M3 |
 | FR-05 | 第 2.4、2.8、4.2、18 节；token 生命周期 | VT-50～VT-55；M2 残留、M3 服务与真实 Tunnel；DO-4、DO-6、VO-7 |
 | FR-06 | 第 2.8、4.2、16.1、17 节；开放端口仍为管理员操作 | VT-60～VT-62，M2；验证计划第 5 节外部扫描，M5 |
 | FR-07 | 第 2.2、2.3、2.6、4、18.2 节；数据来源分层 | VT-70～VT-76；M1～M3 按基线分阶段，不把 SKIP 或静态证据当业务验收 |
 | FR-08 | 第 2、16、18 节提供使用说明的契约输入 | 完整操作手册及 SC1～SC7 在 M4、M5；验证计划第 5 节 M5，本文不代交手册 |
-| FR-09 | 第 16.2、16.3 节；同版本备份、恢复和单连接器切换 | VT-85、VT-86，M4；真实 Tunnel 切换需 VO-7 授权 |
+| FR-09 | 第 16.2、16.3 节；同版本备份、恢复和单连接器切换，默认沿用令牌、必要时轮换（需求 D26） | VT-85、VT-86，M4；真实 Tunnel 切换需 VO-7 授权 |
 | FR-10 | 第 16.3 节；原机回退的两次停止和旧备份 | VT-87～VT-90，M4；版本沿用 VO-4，不在此升级 |
 | FR-11 | 第 18.3 节的拉取/客户端边界 | 验证计划第 5 节 M3、M5；客户端说明在 M5，平台 VO-5 待定 |
 | FR-12 | 第 2.4、2.5、3、15、16.1、19 节 | VT-01～VT-05、VT-15～VT-18；M1 预检、M2 写入，无自动回滚 |
+| FR-13 | 第 2.4、2.8、3、4.2、4.4、16.1 节，DO-14；取值按需求 D29、D31，机制按需求 D32，检查细节按需求 D33 | VT-32～VT-34、VT-71 的 FR-13 部分（验证计划 v1.2）；M2 |
 | NFR-01 | 第 2.3、4.1、8、15.2、18.1、19 节 | VT-13、VT-17、VT-52、VT-74 及全部归档扫描；M1～M3 |
 | NFR-02 | 第 9.1、19 节；公开常量有限例外与私有清单 | VT-97；各次提交前；本地清单不入库 |
 | NFR-03 | 第 3 节 `platform`、第 9.1、9.2 节 | Debian 13 amd64，M1 起；不扩 Debian 12/Ubuntu 矩阵 |
@@ -596,7 +626,9 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 | VT-75 退出码；验证计划第 3.3 节文档地址 | 第 2.2、2.4 节 | M1；不因测试保留地址放宽私有/非公网地址的其他拒绝规则 |
 | 验证计划第 4 节排除清单、VT-71 同阶段基线 | 第 9.4、9.5、19 节 | M1 实测清单；不把检查造成的写入列为排除 |
 | VT-12、VT-30 交给详细设计的接口 | 第 19 节、DO-10、DO-11 | 接缝和 API 设计已写，执行验证在 M2 |
-| 2026-10-30 用户澄清：IPv4 订阅、双栈用于出站；先保留基线 | 第 1、4.4 节、DO-14 | 现行监听偏差沿用 VT-71/M2，公网扫描在 M5；IPv6 出站用例须随 DO-14 同步验证计划后生效 |
+| 2026-10-30 用户澄清（需求 U18、D27）：IPv4 订阅、双栈用于出站；先保留基线 | 第 1、4.4 节、DO-14 | 现行监听偏差沿用 VT-71/M2，公网扫描在 M5；IPv6 出站用例见验证计划 v1.2 的 VT-32～VT-34 |
+| 需求 D24、D26、D28 | 第 2.8、15.1、15.2、16.1、16.3 节 | VT-16、VT-86；令牌轮换分支是文档步骤，不在虚拟机中演练 |
+| 需求 D30 | 第 6.1 节、DO-13 | M1、M2 沿用固定核心；修复版出现后按 FR-10 和验证计划 VO-4 评估 |
 
 ## 14. 本文新核实的事实（2026-10-30）
 
@@ -620,7 +652,7 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 | `setting/update` 先保留遮蔽秘密，再按完整 `AllSetting` 遍历保存；不能当 PATCH 使用 | 固定提交的 [setting.go：UpdateAllSetting](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/service/setting.go#L1669-L1745)、[设置视图控制器](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/setting.go#L100-L109) |
 | POST `/xray/` 对旧包装模板有自愈写入，返回的 `obj` 为 JSON 字符串；`xray/update` 接收表单，省略测试 URL 会复位默认值，保存与核心更新并非一个事务 | 固定提交的 [xray_setting.go：读取与写入](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/xray_setting.go#L77-L164)；与 [OpenAPI](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/frontend/public/openapi.json) 的读取示例有表示差异 |
 | 安装 token 的元数据不含明文；删除接口要求 `expectedScope`，不能只给 ID；安装结果用 `%q` 写出 | [token 服务](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/service/panel/api_token.go#L19-L120)、[删除控制器](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/setting.go#L281-L292)、[install.sh](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/install.sh#L148-L168) |
-| shortId 由前端的 `randomShortIds` 生成；固定版本 OpenAPI 和 server 路由未提供 shortId 生成接口，与上游“接口生成”的文字不一致 | [前端调用](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/frontend/src/pages/inbounds/form/useSecurityActions.ts#L176-L184)、[随机值实现](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/frontend/src/utils/index.ts#L204-L232)、[server 路由](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/server.go#L45-L87)；DO-12 |
+| shortId 由前端的 `randomShortIds` 生成；固定版本 OpenAPI 和 server 路由未提供 shortId 生成接口，与上游“接口生成”的文字不一致 | [前端调用](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/frontend/src/pages/inbounds/form/useSecurityActions.ts#L176-L184)、[随机值实现](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/frontend/src/utils/index.ts#L204-L232)、[server 路由](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/server.go#L45-L87)；DO-12（已按需求 D28 关闭） |
 | 新增使用者和路由测试的请求格式；routeTest 调核心的选路测试，不发送业务请求 | [客户端控制器](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/controller/client.go)、[OpenAPI](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/frontend/public/openapi.json) 的 `/clients/add`、`/xray/routeTest`；第 19 节不以该接口替代 VT-31 |
 | cloudflared 的 tunnel/run 参数归属，token 环境变量优先于 token 文件；有效 ingress 序列化保留空 Host 字段和 path | cloudflared 2026.10.5 [cmd.go](https://github.com/cloudflare/cloudflared/blob/2026.10.5/cmd/cloudflared/tunnel/cmd.go)、[subcommands.go](https://github.com/cloudflare/cloudflared/blob/2026.10.5/cmd/cloudflared/tunnel/subcommands.go#L714-L786)、[rule.go](https://github.com/cloudflare/cloudflared/blob/2026.10.5/ingress/rule.go#L13-L32)、[config.go](https://github.com/cloudflare/cloudflared/blob/2026.10.5/ingress/config.go#L305-L306)、[有效配置导出](https://github.com/cloudflare/cloudflared/blob/2026.10.5/orchestration/orchestrator.go#L255-L278) |
 | `LoadCredential` 把凭据置于服务可读的只读目录，ExecStart 可用 `CREDENTIALS_DIRECTORY` 引用；支持动态用户并不证明本项目已运行成功 | systemd v257 [systemd.exec.xml：Credentials](https://github.com/systemd/systemd/blob/v257/man/systemd.exec.xml#L3448-L3539)；运行验证在 M3 |
@@ -628,6 +660,9 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 | `IPOnDemand` 按需向路由上下文提供 DNS；同条规则各字段取 AND，首条匹配即返回。选择出站不等于连接成功，也不提供连接失败后的跨出站回退 | [固定核心路由器](https://github.com/XTLS/Xray-core/blob/v26.10.21/app/router/router.go#L201-L228)、[条件组合与 IP 匹配](https://github.com/XTLS/Xray-core/blob/v26.10.21/app/router/condition.go#L35-L109)；DO-14 |
 | 地址族解析策略处理域名目标，`Force` 解析失败直接报错；`Use` 可进入底层系统拨号。`sendThrough=0.0.0.0` 在系统拨号器中表示不指定本地源地址，不能证明强制 IPv4。旧 `freedom.domainStrategy` 在该核心仍接受，但会兼容迁移到 `sockopt.domainStrategy` | [解析/拨号条件](https://github.com/XTLS/Xray-core/blob/v26.10.21/transport/internet/dialer.go#L251-L264)、[源地址处理](https://github.com/XTLS/Xray-core/blob/v26.10.21/transport/internet/system_dialer.go#L31-L46)、[兼容迁移](https://github.com/XTLS/Xray-core/blob/v26.10.21/infra/conf/xray.go#L416-L430)；DO-14 |
 | iproute2 6.15 的 `ss -e` 可输出内核提供的 IPv6 socket `v6only`；缺少内核属性时不输出，不能凭缺失值判为 0。命令在 Debian 13 上的真实输出与解析仍待 M2 核实 | [ss.c：读取与输出](https://github.com/iproute2/iproute2/blob/v6.15.0/misc/ss.c#L3752-L3785)、[选项处理](https://github.com/iproute2/iproute2/blob/v6.15.0/misc/ss.c#L5961-L5964)；DO-2、第 4.4 节 |
+| 2026-10-31：3X-UI v3.11.0 的默认模板没有 `dns`。没有 `dns` 时核心用本机解析器（`localdns`），一次取两种地址再按地址族筛选，不按本机路由过滤 AAAA；`dns.queryStrategy` 为 `UseSystem` 时才按本机路由筛选，`UseIPv4`、`UseIPv6` 只保留一种地址族，无法识别的值按 `UseIP` 处理 | [默认模板](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/web/service/config.json)、[默认解析器](https://github.com/XTLS/Xray-core/blob/v26.10.21/core/xray.go)、[localdns](https://github.com/XTLS/Xray-core/blob/v26.10.21/features/dns/localdns/client.go)、[DNS 模块](https://github.com/XTLS/Xray-core/blob/v26.10.21/app/dns/dns.go)、[取值解析](https://github.com/XTLS/Xray-core/blob/v26.10.21/infra/conf/dns.go#L398-L411)；`routing.ai-ipv6`、验证计划 VT-34 |
+| 2026-10-31：没有命中路由规则的连接走第一个出站，出站管理器把第一个加入的出站设为默认 | [outbound.go](https://github.com/XTLS/Xray-core/blob/v26.10.21/app/proxyman/outbound/outbound.go#L109-L111)；`routing.ai-ipv6` |
+| 2026-10-31：路由规则中的 `geosite:` 类别在解析配置时核对，`geosite.dat` 中没有这个类别时配置加载失败；`run -test` 只测试配置、不启动服务，同样经过这一步。资产文件先从 `XRAY_LOCATION_ASSET` 指定的目录、没有时从程序所在的目录查找 | [rule_parser.go](https://github.com/XTLS/Xray-core/blob/v26.10.21/common/geodata/rule_parser.go#L193-L224)、[geodat_loader.go](https://github.com/XTLS/Xray-core/blob/v26.10.21/common/geodata/geodat_loader.go#L19-L29)、[run.go](https://github.com/XTLS/Xray-core/blob/v26.10.21/main/run.go#L83-L93)、[platform.go](https://github.com/XTLS/Xray-core/blob/v26.10.21/common/platform/platform.go#L16-L35)；第 16.1 节、`routing.ai-ipv6` |
 
 ## 15. 3X-UI API 与凭据（M2）
 
@@ -652,7 +687,7 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 | 撤销安装 token | POST `/panel/api/setting/apiTokens/delete/<id>`，JSON | 必须传 `expectedScope=admin`；删除指定 ID。之后用原 token 访问此前成功的固定路径，应为 HTTP 401，并通过第 4.1 节只读数据库方式确认该 ID 已不存在。404、超时或服务停止不能证明撤销 |
 | 重启面板 | POST `/panel/api/setting/restartPanel` | 无业务请求体；成功只说明已调度重启。固定源码延迟约 3 秒触发重启，随后观察 systemd、API 可用性和 `ss`；不能收到 200 就认为新监听已生效 |
 
-**shortId 的上游冲突（DO-12）。** 固定 v3.11.0 的服务端路由和 OpenAPI 有 UUID、X25519 生成接口，没有 shortId 生成接口；前端通过浏览器随机数生成 shortIds。方案设计第 7.3、7.9 节及 VT-16 的“由接口生成 shortId”因此尚不能按原文实现。可供评审的修订方向是由 VPS 的密码学安全随机源生成一个 8 字节值、编码为 16 个十六进制字符，再经 API 写入；**这只是建议，尚未采用**。在用户澄清上游前，不虚构接口、不退化为固定值；只阻塞 M2 中依赖该值的写入和 VT-16，不阻塞 M1。
+**shortId 的生成（需求 D28，DO-12 已关闭）。** 固定 v3.11.0 的服务端路由和 OpenAPI 有 UUID、X25519 生成接口，没有 shortId 生成接口；前端的随机按钮在浏览器中一次生成 8 个不同长度的值（需求第 10.1 节），不符合 `reality.settings` 只有一项的要求。第 6 步由部署脚本执行 `openssl rand -hex 8`：OpenSSL 的密码学安全随机源，8 字节，输出 16 个小写十六进制字符。去掉行尾换行后按 `^[0-9a-f]{16}$` 校验；命令失败或输出不符时停止该步骤，不退化为固定值，也不改用其他随机源。该值只在部署进程的内存中，按第 8 节经标准输入交给 `jq` 构造入站请求，不出现在 argv、日志、错误输出和 handoff 中；写入后按 `reality.settings` 读回核对。之后重新生成也用同一命令，再写入入站，不用面板的随机按钮。`openssl` 已在预检的 `deps` 中（第 3 节）。
 
 ### 15.2 秘密的来源、存放与删除
 
@@ -662,8 +697,8 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 | `/etc/x-ui/install-result.env` | root、0600、普通文件，从同一已核对描述符读取；不 `source`、不 `eval` | 上游以 Bash `printf %q` 编码，不能当第 2.4 节的原始值文件盲读。本工具清除继承覆盖并走全新安装分支后，只接受所需字段的未转义格式：用户名/密码各 10 个、路径标签 18 个 ASCII 字母数字，API token 为 48 个字母数字，端口为数字；不用 `XUI_ACCESS_URL`。所需字段含引号、反斜杠或其他形式时停止并保留受保护原文件，不执行 shell 解码。M2 核实实际格式 |
 | 面板凭据和 `webBasePath` | 进程内存、3X-UI 数据库、root 0600 的 `handoff` | handoff 原子发布并核对后才删除安装结果；管理员取走后删除 handoff。脚本不代为发送，不把内容作为成功摘要 |
 | 安装 admin token | 内存、安装结果；向 `curl` 传入的头配置用受保护文件或标准输入 | 写入、订阅核对及所有需要认证的读回完成后撤销；证实撤销后删除安装结果和认证临时文件。若撤销结果未知，不宣布完成，明确仍需人工核对，不能以删掉明文文件代替撤销 |
-| REALITY 私钥、shortId、客户端 UUID、订阅 ID 和路径 | 仅部署内存及数据库；由 3X-UI 生成订阅。shortId 的生成方式待 DO-12 | 临时请求/响应退出时删除；不进入日志。handoff 仅含订阅 URL 所必需的路径和订阅 ID，不另列私钥、UUID 或 shortId |
-| Tunnel token | 内存与 `/etc/vps-proxy-setup/tunnel-token`；运行时由 systemd 的凭据目录提供 | token 文件同目录暂存、核对属主权限后改名；不把 token 放进 argv、Environment、单元内容或 journal。失败不自动删除已安装的持久文件；迁移或疑似泄露由管理员轮换，运行中的服务需重启才能读取新凭据 |
+| REALITY 私钥、shortId、客户端 UUID、订阅 ID 和路径 | 仅部署内存及数据库；由 3X-UI 生成订阅。shortId 由 `openssl rand -hex 8` 在部署进程中生成（第 15.1 节） | 临时请求/响应退出时删除；不进入日志。handoff 仅含订阅 URL 所必需的路径和订阅 ID，不另列私钥、UUID 或 shortId |
+| Tunnel token | 内存与 `/etc/vps-proxy-setup/tunnel-token`；运行时由 systemd 的凭据目录提供 | token 文件同目录暂存、核对属主权限后改名；不把 token 放进 argv、Environment、单元内容或 journal。失败不自动删除已安装的持久文件；迁移时默认沿用；疑似泄露、旧机被入侵或需要隔离无法管理的旧连接器时由管理员轮换（需求 D26，第 16.3 节），运行中的服务需重启才能读取新凭据 |
 | 安装日志、API 请求和响应临时文件 | `mktemp -d` 的 root 0700 私有目录，文件 0600，禁止 xtrace 和 curl verbose/trace | 正常退出、ERR、INT、TERM 清理；掉电/SIGKILL 后须按失败说明检查残留。任何诊断摘录先删除已知秘密及敏感字段；无法可靠脱敏时只报告步骤、退出状态和原因类别 |
 
 `handoff` 采用 UTF-8 JSON：`format=1`、`panel`（`username`、`password`、`webBasePath`、`port`）、`users` 数组（每项 `email`、`subscriptionUrl`、`mihomoUrl`）。两个地址分别用当前 `subPath`、`subClashPath` 和该人的 `subId` 构造：`https://<sub_host>/<路径>/<subId>`，路径连接规则按第 14 节，不重生成订阅路径。文件只显示交付位置，内容不输出。写在目标目录的临时文件，完成解析回验、数量和权限核对后原子改名；异常停止，保留仍需要的原始凭据来源。
@@ -692,7 +727,7 @@ VT-76：在同一个状态下连续执行三次，输出逐字节相同。说明
 | 3 安装 | 保存 `90-proxy-vps.conf` 的路径、权限和摘要供后续核对；非交互运行已核对安装器，输出受保护 | 安装器可能已启动服务或写库；失败属于部分安装，不假称未改动 |
 | 4 安装后核对 | 先核对所装文件，再执行 `x-ui setting -listenIP 127.0.0.1` 并重启；验证面板只监听回环、tuning drop-in 保持、无 `3x-ipl` | 安装后摘要不符走 SR-9：停止，不写业务设置，提示按潜在入侵处理并重装；不把普通卸载清理当作消除了该风险（VT-12） |
 | 5 写入前核对 | 确认版本、无入站/使用者、有效订阅设置为新装默认；只读比较通过后，读取安装结果并验证安装 token。检查所选 target 的有效记录；所有输入仍在内存中 | 已有业务配置则拒绝。拒绝路径不调用可能自愈写库的 `/xray/`，不删除输入或安装结果（VT-15） |
-| 6 写业务配置 | 获取完整设置和模板；按第 15 节生成密钥（shortId 先解决 DO-12）。保留订阅路径，写订阅设置；创建回环转发入站和 REALITY 入站，取得真实 ID/tag 后写模板前四条路由；逐人创建客户端并读回。初始化时公网 443 尚未开放，最终路由确认前不把节点交给使用者 | 每次写入后核对本项。取得 tag 后才写路由是对上游写入步骤内部的细化，不猜 tag。失败停止且保留已完成部分，不自动恢复数据库（VT-16、VT-18） |
+| 6 写业务配置 | 获取完整设置和模板；按第 15 节生成密钥（shortId 按第 15.1 节在本机生成）。保留订阅路径，写订阅设置；创建回环转发入站和 REALITY 入站，取得真实 ID/tag 后写模板前四条路由。输入 `ipv6_ai_egress=on` 时，同一次模板写入加上第 4.4 节的 `ai-ipv6` 出站和第五条规则；写入之前用 3X-UI 自带的 Xray 以 `run -test` 加载一份只含这个出站和这条规则的临时配置，确认自带的 `geosite.dat` 有这两个类别，不通过则停止、不写模板（第 14 节）。之后逐人创建客户端并读回。初始化时公网 443 尚未开放，最终路由确认前不把节点交给使用者 | 每次写入后核对本项。取得 tag 后才写路由是对上游写入步骤内部的细化，不猜 tag。失败停止且保留已完成部分，不自动恢复数据库（VT-16、VT-18；FR-13 见 VT-32、VT-33） |
 | 7 收尾 3X-UI | 重启面板，等待服务/API 恢复并核对订阅监听及本机订阅；准备并原子发布 handoff；撤销并证实安装 token 失效；发布 `deploy.conf`；删除 `install-result.env` 和原输入文件，清除不再需要的秘密 | 订阅读回在撤销 token 前完成；handoff 写失败不能先删唯一凭据来源。成功后 token、安装结果和输入文件均不残留（VT-17）；部署记录不等于 Tunnel 已就绪 |
 | 8 Tunnel | 固定摘要核对 cloudflared，安装二进制、root 0600 token、服务单元；`daemon-reload` 后核对已加载属性；启用并启动，按第 18 节等 `/ready` 和有效路由 | M3 的真实连接验证独立；假 token 超时必须返回 1，保留部署后状态供只读检查和清理，不回滚 3X-UI（VT-53） |
 | 9 检查 | 执行完整 `check`，报告其退出码；0 时提示管理员按 FR-06 开放 443/tcp、从新 SSH 会话确认并做外部验收 | 脚本不调用 `vps-hardening ports`、不改 UFW。最终检查失败返回 1，配置仍在 |
@@ -725,11 +760,15 @@ M2 的开发阶段执行到第 7 步后以 1 报告 Tunnel 尚未实现，符合
 
 cloudflared 的二进制、token 和单元安装到位，执行 `daemon-reload`，但**不启用、不启动新机连接器**。发布 `mode=migrate` 的部署记录，保存新 `node_ip`，确认 token 文件后删除输入文件；新装临时 `install-result.env` 在服务停止后删除，其空库将在恢复时整体移走。安装准备返回 0 的条件是两种固定版本文件、权限、单元及部署记录符合，两个服务均保持停止且新机连接器未启用；不运行完整 `check` 的通过条件来冒充已迁移。M3 以前未完成 cloudflared 安装的阶段版本仍返回 1。
 
-后续由管理员按文档执行：
+后续由管理员按文档执行。开始切换前按需求 FR-09 确认既有管理路径：大陆到旧节点全部 TCP 不可达时，不能依赖同一路径的 SSH。使用服务商控制台或已有可信管理路径确认旧连接器状态；无法管理旧机时，须通过已授权的 Cloudflare 管理操作确认旧连接器已隔离。具体操作在使用说明中核实，不由 `deploy --migrate` 自动调用 Cloudflare API，也不新增公网管理入口：
 
-1. 在新机复用第 16.2 节的备份核对、停写者、移走旧库及侧文件、替换和完整性检查，以及 x-ui 的恢复验证；**不执行该节原机恢复的 cloudflared 启动**。保留原订阅路径、订阅 ID 和使用者；启用并启动 x-ui，在面板把分享地址改为新机 IPv4，核对回环订阅及部署记录。恢复/改地址未成功不得切换 Tunnel，切换只在下一步执行。
-2. **先停止旧机 cloudflared，再启用并启动新机 cloudflared**，用同一 Tunnel 接入，避免同一订阅随机返回新旧节点地址；订阅主机名和 DNS 不因此更改。怀疑旧机被入侵时先在授权范围内轮换 token；失效旧 token 与关闭已经建立的旧连接分别核实，不能只保存新文件就认为旧连接已断。
-3. 按 FR-06 开放新机 443/tcp 并确认，执行完整 `check`、经 Tunnel 的订阅和客户端验证。失败时保持单一连接器，是否切回旧机由管理员决定，先检查旧机是否仍可信。
+1. 在新机复用第 16.2 节的备份核对、停写者、移走旧库及侧文件、替换和完整性检查，以及 x-ui 的恢复验证；**不执行该节原机恢复的 cloudflared 启动**。保留原订阅路径、订阅 ID 和使用者；启用并启动 x-ui，在面板把分享地址改为新机 IPv4，核对回环订阅及部署记录。恢复的数据库带着旧机的面板端口（`webPort`）：与新机 vps-hardening 记录的面板端口不同时，在同一步中经 SSH 隧道连到恢复后的端口，在面板中改为新机的值并重启面板，按第 15.1 节观察新监听，否则 `panel.listen` 不通过。恢复/改地址未成功不得切换 Tunnel，切换只在下一步执行。
+2. 切换 Tunnel 的连接器，始终只保留一个，避免同一订阅随机返回新旧节点地址；用同一个 Tunnel，订阅主机名和 DNS 不因此更改。分两种情形（需求 D26）：
+   - **默认：沿用同一个令牌。** 旧机可以管理时，**先停止并禁用旧机 cloudflared，再启用并启动新机 cloudflared**；新机用 `--migrate` 写入的令牌文件。
+   - **轮换：怀疑旧机被入侵，或旧机无法管理、需要隔离旧连接器。** 强制断开只断开已建立的连接，旧连接器持有有效令牌就能重新接入，所以要轮换。在授权范围内依次：① 在 Cloudflare 上轮换令牌；② 把新令牌写入新机的令牌文件，沿用第 2.8、15.2 节的暂存、核对属主权限、改名，不经 argv；③ 在 VPS 之外用管理员持有的 API Token 强制断开该 Tunnel 的已有连接（需求 A-2、第 10.1 节）；④ 在 Cloudflare 上确认该 Tunnel 没有连接器在线；⑤ 启用并启动新机 cloudflared。不能只保存新文件就认为旧连接已断。替换令牌文件是使用说明中的文档步骤，不新增子命令；具体接口和命令在使用说明中对照届时的 Cloudflare 文档核实。
+
+   无法确认旧连接器已停止或隔离时，停止切换，新机连接器继续保持未启用、未启动，不把新机准备完成报告为迁移成功。
+3. 按 FR-06 开放新机 443/tcp 并确认，执行完整 `check`、经 Tunnel 的订阅和客户端验证；订阅获取须满足需求 FR-09 的前提，不能把 `check` 通过代替客户端取得新内容。节点不可用场景复用验证计划第 5 节 M5。失败时保持单一连接器，是否切回旧机由管理员决定，先检查旧机是否仍可信。
 
 3X-UI 升级和回退不运行 `deploy` 绕过“全新安装”检查。升级先做第 16.2 节备份、按 FR-10 评估新版本并固定相应摘要。**原机回退必须依次停止 x-ui → 按旧版固定摘要重装（安装器可能自动启动）→ 再停止 x-ui → 恢复旧备份并处理侧文件 → 启动 → 检查**，不能省掉第二次停止；Tunnel 在恢复期间停止，验证后再接入。新机回退沿用迁移流程。cloudflared 升级只替换已核对的二进制并重启本服务，失败换回原版本并重新检查，不改 x-ui 或 REALITY。起止版本沿用验证计划 VO-4；此处没有批准新的版本。
 
@@ -801,8 +840,8 @@ VO-7 未确定前不操作 Cloudflare 路由、DNS、证书或测试 VPS；VO-5 
 | 设置读取与判定 | 第 4.1 节一次只读快照转为不含秘密的固定字段；纯判定逻辑只接受这些值。测试可传入畸形/缺字段快照，但不能代替真实 SQLite 的 VT-72、VT-75 | VT-71～VT-76，M1 起；服务状态变化和侧文件竞态纳入 DO-1 |
 | target 与 HTTP 权威 | 用第 9.2 节替身切换按 SNI/Host 路由、证书信任及分段行为，记录传入 SNI 与 Host/authority；不改变产品的连接目的地址限制 | VT-80、VT-81，M1；VT-23～VT-29，M2 |
 | Xray 路由测试 | POST `/panel/api/xray/routeTest`，表单字段 `domain` 或 `ip`（二者择一）、`port=443`、`network=tcp`、`inboundTag=<实际 tag>`；不依赖协议或用户规则时省略 `protocol`、`email`。在撤销安装 admin token 前执行，之后仍须按 VT-17 撤销，不为生产 `check` 保留它。回国屏蔽须 `success=true`、`obj.matched=true`、`obj.outboundTag=blocked`；转发 target 应命中 `direct`。对照域名允许未命中规则（`matched=false`、空 tag），此时须另核对最终生成配置的首个默认出站确为 `direct`。接口只测试核心选路，不发送业务流量 | VT-30 加收尾后 VT-31 的真实客户端请求，M2；[响应语义源码](https://github.com/MHSanaei/3x-ui/blob/c621ba9014a6aa21fd7c9ecf45655e44e24ebf13/internal/xray/api.go#L369-L378)，运行结果待 DO-11 |
-| 双栈监听与出站（DO-14） | 监听解析接受按地址族归一化的 socket 地址及可用的 `v6only`，按 `listen.reality` 判断；两种通配监听各自存在时无需 `v6only`，仅在依靠 IPv6 socket 证明 IPv4 接收能力时要求该值为 0。真实 VM 验证独立监听和单个双栈 socket 的上述预期。出站测试使用隔离 DNS、双栈替身、真实客户端和外连观测；分别控制解析结果与 IPv6 路由，观察实际连接，不把 routeTest 的 tag 当连通证明。DO-14 冻结前不新增生产模式/检查开关 | 监听沿用 VT-71，M2；出站矩阵见第 4.4 节，编号及预期待 DO-14；M5 的外部扫描不变 |
-| 核心拒绝连接回收（DO-13） | 使用已认证 REALITY + Vision 客户端，使请求进入 Freedom 的私有地址 block 分支并保持连接；测试驱动观察客户端及服务端连接结束，不输出秘密。另跑正常转发和重启对照；不修改生产配置来绕过私有地址屏蔽 | 第 6.1 节，M2 核心评估；专用用例随 DO-13 评审纳入验证计划，运行尚未执行 |
+| 双栈监听与出站（DO-14） | 监听解析接受按地址族归一化的 socket 地址及可用的 `v6only`，按 `listen.reality` 判断；两种通配监听各自存在时无需 `v6only`，仅在依靠 IPv6 socket 证明 IPv4 接收能力时要求该值为 0。真实 VM 验证独立监听和单个双栈 socket 的上述预期。出站测试用客体的 `/etc/hosts`、双栈替身、外连隔离、真实客户端和外连观测；分别控制解析结果与 IPv6 路由，观察实际连接，不把 routeTest 的 tag 当连通证明。生产侧只有部署输入 `ipv6_ai_egress`，不新增测试开关；IPv6 地址、路由和替身的拒绝/丢弃由测试驱动在客体和替身命名空间中改变 | 监听沿用 VT-71，M2；出站见验证计划 VT-32～VT-34，M2；M5 的外部扫描不变 |
+| 核心拒绝连接回收（DO-13） | 使用已认证 REALITY + Vision 客户端，使请求进入 Freedom 的私有地址 block 分支并保持连接；测试驱动观察客户端及服务端连接结束，不输出秘密。另跑正常转发和重启对照；不修改生产配置来绕过私有地址屏蔽 | 第 6.1 节，评估 3X-UI 修复版时执行（需求 D30）；专用用例随该评估纳入验证计划，运行尚未执行 |
 | systemd、进程与 `/config` | 解析函数接受脱敏结构化数据，隔离单测覆盖空值/缺字段；真实 VM 通过单元/drop-in、reload/restart 的不同顺序注入。真实 Tunnel 路由偏差只在 VO-7 授权的 VPS 进行 | VT-51～VT-53、VT-71，M3；模拟响应不能计为 `/ready` 或 Cloudflare 验收 |
 | 备份与恢复 | 管理员文档步骤是测试入口，驱动用隔离副本模拟坏摘要、完整性失败、残留侧文件和重装后服务自动启动；不在产品加入 restore 子命令 | VT-85～VT-90，M4；观察点见第 16.2、16.3 节 |
 
