@@ -2,17 +2,18 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | v1.0 已批准：用户于 2026-10-29 评审通过（需求 U14、D22），第 11 节的 OD-1～OD-4 都已决定。按需求 v1.3 起草，确定实现形态、写入方式、REALITY 的转发限制、订阅与 Tunnel、只读检查、迁移与升级，以及需求中留给方案设计的各项取值。按 CodeRabbit 对草案的意见，转发入站的目的地址改为占位的回环 IP，使不带 SNI 的连接不被转发（第 4.4、7.4 节）。按一份外部评审的意见（用户 2026-10-29 确认，需求 U12、U13）修订：检查不再调用 `x-ui setting`；转发入站只嗅探 TLS，并写明嗅探失败的代价和相应用例；写明安装核对的残余风险、虚拟机与真实 Tunnel 的判定边界、`check` 结论的范围。OD-2、OD-4 已决定（第 11 节） |
-| 日期 | 2026-10-29 |
-| 上游 | [需求规格说明 v1.3](requirements.md)（已批准）；[vps-hardening 方案设计](https://github.com/alieismy/vps-hardening/blob/master/docs/solution-design.md)的形态和惯例 |
-| 下游 | [验证计划](verification-plan.md)（v1.0 已批准）；详细设计、实现（还没有开始） |
+| 状态 | v1.4 已批准：用户 2026-10-31 决定 OD-5（需求 U21、D32）：FR-13 用设了 `ForceIPv6v4` 的新增出站实现，路由保持 `AsIs`，不采用配置样例，不固定 IPv6 源地址（第 7.4、10、11 节）。v1.3 已批准：按需求 v1.6（U20、D31）做的一致性修改：FR-13 改为 IPv6 失败时不改走 IPv4，第 7.4 节和 OD-5 的建议随之改写，并列出用户提供的配置样例的做法作为对照。OD-5 仍待决，其中的建议不是决定。v1.2 已批准：按需求 v1.5（U19、D29）做的一致性修改，同步 FR-13 已定的取值：第 7.4 节和 OD-5 的建议改为在 IPv6 连接失败时能改走 IPv4 的机制，是否启用由部署输入决定。OD-5 仍待决，其中的建议不是决定。v1.1 已批准：用户 2026-10-31 批准（需求 U17、D25），按需求 v1.4 修订。第 7.8 节的迁移和恢复前提（需求 D24）；迁移默认沿用同一个 Tunnel 的令牌，怀疑入侵或需要隔离旧连接器时轮换（第 7.8、7.9 节，需求 D26）；FR-13 的机制列为 OD-5，在 M2 实现之前决定（第 7.4、10、11 节，需求 D27）；shortId 改由部署脚本在 VPS 上生成（第 7.3、7.4、7.9 节，需求 D28）。v1.0 的架构选择不变。v1.0 已批准：用户于 2026-10-29 评审通过（需求 U14、D22），第 11 节的 OD-1～OD-4 都已决定。按需求 v1.3 起草，确定实现形态、写入方式、REALITY 的转发限制、订阅与 Tunnel、只读检查、迁移与升级，以及需求中留给方案设计的各项取值。按 CodeRabbit 对草案的意见，转发入站的目的地址改为占位的回环 IP，使不带 SNI 的连接不被转发（第 4.4、7.4 节）。按一份外部评审的意见（用户 2026-10-29 确认，需求 U12、U13）修订：检查不再调用 `x-ui setting`；转发入站只嗅探 TLS，并写明嗅探失败的代价和相应用例；写明安装核对的残余风险、虚拟机与真实 Tunnel 的判定边界、`check` 结论的范围。OD-2、OD-4 已决定（第 11 节） |
+| 日期 | 2026-10-31（v1.1～v1.3 同日，v1.0 为 2026-10-29） |
+| 本次修订 | 2026-10-31，v1.4：按需求 U21、D32 关闭 OD-5；v1.3（同日）：按需求 U20、D31 改写 FR-13 的机制建议；v1.2（同日）：按需求 U19、D29 同步 FR-13 的取值和 OD-5 的建议；v1.1（同日）：按需求 U16、D24 澄清第 7.8 节的迁移和恢复前提，按需求 U17（D25～D28）修改令牌、shortId 和双栈出站的相关条目；v1.0 的架构选择不变 |
+| 上游 | [需求规格说明 v1.6](requirements.md)（已批准）；[vps-hardening 方案设计](https://github.com/alieismy/vps-hardening/blob/master/docs/solution-design.md)的形态和惯例 |
+| 下游 | [验证计划](verification-plan.md)（v1.3 已批准，补入 FR-13 的用例，含 UDP 的判定）；[详细设计](detailed-design.md)（v1.0 已批准，M1 及后续阶段的接口、生命周期和测试契约）；实现（还没有开始） |
 | 深度 | 高层设计：确定组件、边界、流程和关键机制，不含代码和操作手册 |
 
 **证据状态。** 本文只是设计，仓库里还没有实现，也没有任何运行证据。标"已核实"的，是 2026-10-29 对照 3X-UI v3.11.0（及其自带的 Xray v26.10.21）、cloudflared 2026.10.5、vps-hardening `v0.1.1` 的源码或文档核实的结果，出处见第 13 节和需求第 10.1 节；标"推断"的，要在虚拟机测试或测试 VPS 上证实。
 
 ## 1. 背景与目标
 
-需求 v1.3 已经确定要做什么，本文回答怎么做：
+需求 v1.6 已经确定要做什么，本文回答怎么做：
 
 - 首次部署脚本和只读检查用什么形态实现（D12）；
 - 部署脚本怎样把入站、使用者、订阅设置和分流规则写入全新的 3X-UI（FR-12）；
@@ -208,7 +209,7 @@ A 的服务单元以 systemd 的动态用户运行 cloudflared，令牌文件仍
 | 3. 安装 3X-UI | 非交互运行固定摘要的 `install.sh`（第 4.3 节），输出不进日志 | 停止，按清理步骤处理 |
 | 4. 安装后核对 | 所装的 `/usr/bin/x-ui`、程序文件、`x-ui.service` 与第 2 步一致；`x-ui setting -listenIP 127.0.0.1` 后重启 x-ui，面板只在回环地址上监听 | 同上 |
 | 5. 写入前核对 | 没有入站和使用者，订阅设置是默认值；能用 `install-result.env` 中的 token 访问 API | 拒绝写入，数据库不变 |
-| 6. 写入 | 订阅设置（第 7.5 节）、Xray 配置模板中的路由（第 7.4 节）、转发入站、REALITY 入站和使用者；REALITY 密钥对、shortId、UUID 和订阅 ID 由 3X-UI 的接口生成 | 停止并报告，按清理步骤处理（不自动回滚，FR-12） |
+| 6. 写入 | 订阅设置（第 7.5 节）、Xray 配置模板中的路由（第 7.4 节）、转发入站、REALITY 入站和使用者；REALITY 密钥对、UUID 和订阅 ID 由 3X-UI 的接口生成；v3.11.0 没有生成 shortId 的接口，shortId 由部署脚本在 VPS 上用密码学安全随机源生成（`openssl rand -hex 8`，需求 D28），再经接口写入 | 停止并报告，按清理步骤处理（不自动回滚，FR-12） |
 | 7. 收尾 3X-UI | 重启面板使订阅服务改为回环监听；经 API 删除安装 token；把面板凭据、`webBasePath` 和每人的订阅地址写入交给管理员的文件；删除 `install-result.env` | 同上 |
 | 8. 安装 cloudflared | 核对固定的摘要，安装程序文件、令牌文件和服务单元，启动并等待 `/ready` | 同上 |
 | 9. 检查 | 执行 `check`；提示管理员执行 `vps-hardening ports --add 443/tcp` 并从新的 SSH 会话确认（FR-06，不在脚本中） | 报告不符合项 |
@@ -226,7 +227,7 @@ REALITY 入站：
 | flow | `xtls-rprx-vision`，每个使用者都设置 | 与 RAW + REALITY 的常规组合一致；3X-UI 生成的 Mihomo 配置带 `flow`（已核实） |
 | target | `127.0.0.1:<转发端口>` | 第 4.4 节 |
 | serverNames | 只有 target 的主机名 | FR-02 |
-| shortIds | 一个随机值 | 减少可猜测的取值（推断） |
+| shortIds | 一个随机值：8 字节，编码成 16 个十六进制字符，由部署脚本在 VPS 上生成（需求 D28） | 取允许的最大长度，减少可猜测的取值（推断）；面板的随机按钮一次生成 8 个不同长度的值，不用（需求第 10.1 节） |
 | fingerprint | `chrome` | 3X-UI 文档推荐提供 ML-KEM 的值，Mihomo 的 `chrome` 在 uTLS v1.8.7 中提供（需求第 10.1 节）；3X-UI 把它写成 `client-fingerprint`（已核实） |
 | 回落限速 | 首版不设 | 转发入站已经只放行 target；需要时作为附加措施（FR-02） |
 | 分享地址 | `shareAddrStrategy=custom`，`shareAddr`=VPS 的公网 IPv4 | 不设时，3X-UI 依次用节点地址、监听地址、`subDomain`，最后是请求的主机名（已核实），会给出订阅主机名，REALITY 连不上 |
@@ -251,6 +252,16 @@ REALITY 入站：
 依据是 REALITY README 的"配置加分项：禁回国流量"，它没有说明理由，也没有测量，所以本文不把它算作已证实的抗探测收益。客户端的规则已经让国内流量直连（D13），这两条只影响漏到代理上的国内流量。`domainStrategy` 保持 `AsIs`：Mihomo 发来的多是域名，`geoip:cn` 只匹配 IP 字面量，域名靠 `geosite:cn`；不在 `geosite:cn` 中、却解析到国内地址的域名不挡。改成 `IPOnDemand` 能补上这一块，代价是服务端要为经 REALITY 入站、带域名的每个连接做一次解析，不采用。域名解析到私有地址的情况已由 `direct` 的 `finalRules` 挡住，不依赖 `IPOnDemand`。
 
 同一条加分项中的"TCP/80、UDP/443 也转发"（让 VPS 对外像端口转发）不做：D21 和 vps-hardening 的约定只开放 443/tcp。这是已知的偏离。
+
+双栈的出站（FR-13，需求 D27、D29、D31）：机制已决定（OD-5，需求 D32），在 M2 实现，只在部署输入启用时写入模板。取值：是否启用由部署输入明确给出，未启用时不写入；目的域名有 IPv6 地址时只经 IPv6 出站，IPv6 不可用或连接失败时连接失败，不改走 IPv4；没有 IPv6 地址时走 IPv4；其余流量保持系统默认。
+
+机制（A，需求 D32）：新增一个 freedom 出站，`finalRules` 与 `direct` 相同，`streamSettings.sockopt.domainStrategy` 设为 `ForceIPv6v4`，不设 `happyEyeballs`；在规则 4 之后、模板原有规则之前加一条：来自 REALITY 入站、目的域名命中 `geosite:openai` 或 `geosite:anthropic` → 这个出站。按 Xray v26.10.21 的源码（第 13 节）：`ForceIPv6v4` 先只查 AAAA，查到就只连 IPv6，连接失败不改走 IPv4（`tryDelayMs` 默认为 0，不竞速，地址也只有 IPv6）；查不到 AAAA 才查 A、走 IPv4；两者都查不到时连接失败，不交给系统解析。TCP 和 UDP 都按这个顺序。路由的 `domainStrategy` 仍是 `AsIs`，规则 3、4 的匹配不变。
+
+用户提供的配置样例的做法（B，需求 U20）：路由的 `domainStrategy` 改为 `IPOnDemand`，规则同时要求域名命中这两个类别和 `ip: ::/0`，命中时走设了 `ForceIPv6` 的 IPv6 出站，不命中的落入默认规则、走 IPv4；出站还用 `sendThrough` 固定了源地址。B 对 FR-13 的选路效果与 A 相同（推断），但 `IPOnDemand` 会让规则 4 的 `geoip:cn` 也匹配解析到国内地址的域名，并为经 REALITY 入站、带域名的连接做解析，改变 D22 的取舍，不采用（需求 D32）。样例中把其余流量限定在 IPv4 出站、删除 `direct` 等设置，与需求 D29 的第 2 项（保持系统默认）不同，也不采用；其余流量仍走 `direct`。
+
+不用 `sendThrough` 固定 IPv6 源地址，由内核选择源地址（需求 D32）。理由：A 的出站设了 IPv6 源地址后，只查 AAAA、不再回退查询 A（源码，第 13 节），没有 IPv6 地址的域名会连接失败，与 D31 不符，要固定就得拆成两个出站并在选路时判断 AAAA，也就是回到 B；固定还要多一个部署输入，地址变化时这个出站失败。主机只有一个全局 IPv6 地址时，内核总是选它，不固定出口也不变。代价是主机有多个全局 IPv6 地址或临时地址时，出口可能随目的地址或地址变化而变；这类主机由检查提示（详细设计 DO-14）。重新评估的条件：出现这类主机，并且需要固定出口。
+
+实际行为在 M2 中验证；固定的发布包中的 `geosite.dat` 是否有这两个类别，在 M2 实现之前按 v3.11.0 核实（需求第 10.1 节），没有时回到用户决定。
 
 使用者：每人一个客户端，email 是代号，UUID 和订阅 ID 由接口生成（FR-03）。停用之后 Xray 不再接受这个 UUID；订阅是否还列出这个节点，v3.11.0 的订阅代码没有按启用状态过滤客户端（推断，在 M2 中核实），FR-03 要求的是"不再返回可用的节点"，不可用的节点也满足。
 
@@ -315,7 +326,9 @@ target 的标准以需求第 11.5 节为准，不另加排除项；用户原来�
 ### 7.8 备份、迁移、升级与回退（FR-09、FR-10）
 
 - **备份：** 用 `sqlite3` 的在线备份命令生成数据库的一致副本，不必停止 x-ui；管理员取走后加密保管。Tunnel 的令牌也可以在 Cloudflare 上重新取得，不必备份。
+- **迁移前提：** 先按需求 FR-09 确认不依赖受阻 TCP 链路的既有管理路径；旧机 SSH 不可达不等于旧 cloudflared 已停止。无法确认旧连接器已停止或隔离时，不启动新机连接器，不宣称完成迁移。默认沿用同一个 Tunnel 的令牌；怀疑旧机被入侵，或旧机无法管理、需要隔离旧连接器时，轮换令牌，新机用新令牌接入（需求 D26）。轮换令牌不能代替断开已有连接，具体顺序见详细设计第 16.3 节。
 - **迁移：** 新机上执行 `deploy --migrate`（预检、安装 3X-UI 和 cloudflared），停止 x-ui、替换数据库、启动 x-ui，在面板中把分享地址改为新机的 IP；先停止旧机的 cloudflared 再接入新机；开放 443/tcp，执行 `check`（FR-09）。部署记录中的节点 IP 由 `--migrate` 的输入给出。
+- **订阅恢复：** 保持主机名不变不等于无条件可更新；源站、Tunnel、Cloudflare 入口和客户端获取路径须满足需求 FR-09。节点不可用时取得新内容的验证复用验证计划第 5 节 M5，不增加第二常驻节点。
 - **升级 3X-UI：** 按需求第 11.3 节的准则评估，备份，按新版本的固定摘要重新执行安装，执行 `check`。`install.sh` 在已有凭据时保留原来的凭据，只在 `webBasePath` 短于 4 个字符时重新生成（已核实）；部署时生成的 `webBasePath` 是 18 个字符，不受影响。
 - **回退：** 原机回退按 FR-10 的顺序；新机回退按迁移。
 - **升级 cloudflared：** 替换程序文件，更新本仓库中的固定摘要，重启服务，执行 `check`；失败时换回原来的程序文件。
@@ -326,9 +339,9 @@ target 的标准以需求第 11.5 节为准，不另加排除项；用户原来�
 |---|---|---|---|
 | 面板用户名、密码、`webBasePath` | `install.sh` 随机生成 | 3X-UI 数据库；交给管理员的文件 | 管理员取走后删除文件 |
 | 安装时的 API token（admin 范围） | `install.sh` 生成 | 数据库中只有摘要；`install-result.env` | 部署结束时经 API 删除 token，删除文件 |
-| REALITY 私钥、shortId | 3X-UI 的接口 | 数据库 | 换 target 或怀疑泄露时在面板中重新生成 |
+| REALITY 私钥、shortId | 私钥：3X-UI 的接口；shortId：部署脚本在 VPS 上用 `openssl rand -hex 8` 生成（需求 D28） | 数据库 | 换 target 或怀疑泄露时重新生成：私钥在面板中重新生成，shortId 用同一命令生成后写入，不用面板的随机按钮 |
 | UUID、订阅 ID、订阅路径 | 3X-UI 的接口和初始化 | 数据库；交给管理员的文件中的订阅地址 | 单独重置（FR-03） |
-| Tunnel 的令牌 | Cloudflare 控制台 | `/etc/vps-proxy-setup/` 下 root 所有、0600 的文件 | 迁移或怀疑泄露时轮换（R-16） |
+| Tunnel 的令牌 | Cloudflare 控制台 | `/etc/vps-proxy-setup/` 下 root 所有、0600 的文件 | 迁移时默认沿用；怀疑泄露、旧机被入侵，或需要隔离无法管理的旧连接器时轮换（R-16，需求 D26） |
 
 其他控制：
 
@@ -367,7 +380,7 @@ target 的标准以需求第 11.5 节为准，不另加排除项；用户原来�
 | 里程碑 | 内容 | 完成的标志 |
 |---|---|---|
 | M1 只读部分 | 工具骨架、安装器、`check` 和 `target-check`，预检 | CI 中 ShellCheck、只读检查的注入测试和 `check` 不改动数据库的测试通过 |
-| M2 部署 | `deploy` 的第 1～7 步和 `--migrate`；规则文本 | CI 虚拟机中部署、Mihomo 连接、FR-02 负面用例、回国流量规则、FR-12 的失败用例通过；SNI 正确的用例通过，或者没通过时已按第 4.4 节接受并记入 SR-3、或改用 B 后通过 |
+| M2 部署 | `deploy` 的第 1～7 步和 `--migrate`；规则文本；FR-13 的出站和路由（按部署输入启用） | CI 虚拟机中部署、Mihomo 连接、FR-02 负面用例、回国流量规则、FR-12 的失败用例通过；SNI 正确的用例通过，或者没通过时已按第 4.4 节接受并记入 SR-3、或改用 B 后通过；FR-13 的用例按验证计划 VO-8 确定后通过 |
 | M3 Tunnel | `deploy` 的第 8 步；cloudflared 的服务单元 | CI 中 cloudflared 的安装和核对通过（测试令牌，不判定就绪）；测试 VPS 上 `/ready` 就绪，经 Tunnel 取得订阅，`/config` 检查和路由偏差注入通过 |
 | M4 运维 | 备份、迁移、升级和回退的文档 | 虚拟机中迁移、升级、原机回退和新机回退各一次 |
 | M5 验收 | 使用说明和客户端说明 | 测试 VPS 上按使用说明完成 SC1，三个客户端连接成功，外部扫描通过 |
@@ -380,6 +393,7 @@ target 的标准以需求第 11.5 节为准，不另加排除项；用户原来�
 | OD-2 | 服务端是否屏蔽回国流量 | 已决定（需求 D22）：采用 `geosite:cn` 和 `geoip:cn` → `blocked`，只限 REALITY 入站，`domainStrategy` 保持 `AsIs`（第 7.4 节） |
 | OD-3 | 以动态用户运行 cloudflared | 已决定（需求 D22）：采用；不可行时先改用固定的非特权系统用户，再考虑 root（SR-8） |
 | OD-4 | 参考方案中 target 的其他排除项 | 已决定（需求 D22）：参考方案不再使用，不另加排除项，target 的标准以需求第 11.5 节为准（第 7.7 节） |
+| OD-5 | FR-13 的机制（需求 D27） | 已决定（需求 D32）：新增一个 freedom 出站，`sockopt.domainStrategy` 为 `ForceIPv6v4`，不设 `happyEyeballs`，不设 `sendThrough`；路由按 `geosite:openai`、`geosite:anthropic` 只把 REALITY 入站的连接引到它，路由的 `domainStrategy` 保持 `AsIs`（第 7.4 节），不改变 OD-2 的取舍。不采用配置样例的 `IPOnDemand` 加 `ip: ::/0`、IPv4 出站和删除 `direct` |
 
 ## 12. 需求追踪
 
@@ -388,7 +402,7 @@ target 的标准以需求第 11.5 节为准，不另加排除项；用户原来�
 | FR-01 | 第 4.3 节，第 7.3 节第 2～4 步 |
 | FR-02 | 第 4.4 节，第 7.4 节，第 7.7 节 |
 | FR-03 | 第 7.4 节 |
-| FR-04 | 第 7.5 节 |
+| FR-04 | 第 7.5、7.8 节 |
 | FR-05 | 第 4.5 节，第 7.5 节，第 7.3 节第 8 步 |
 | FR-06 | 第 7.1 节，第 7.3 节第 9 步，第 7.6 节（外部验证） |
 | FR-07 | 第 4.6 节，第 7.6 节 |
@@ -400,8 +414,12 @@ target 的标准以需求第 11.5 节为准，不另加排除项；用户原来�
 | NFR-05 | 第 4.3 节，第 4.5 节 |
 | NFR-06、NFR-07 | 第 7.6 节，第 8 节 |
 | D21、R-15～R-17 | 第 7.1 节，第 7.5 节，第 7.9 节 |
+| D24 | 第 7.8 节；研究与范围复核见需求第 11.5 节 |
+| FR-13、D27、D29、D31、D32 | 第 7.4 节，第 10 节 M2，OD-5 |
+| D26 | 第 7.8、7.9 节 |
+| D28 | 第 7.3 节第 6 步，第 7.4、7.9 节 |
 
-## 13. 本文新核实的事实（2026-10-29）
+## 13. 本文新核实的事实（2026-10-29～31）
 
 需求第 10.1 节已有的不再重复。
 
@@ -425,3 +443,4 @@ target 的标准以需求第 11.5 节为准，不另加排除项；用户原来�
 | vps-hardening 的检查结果分 PASS、WARN、FAIL、SKIP；退出码 0、1、2、3 分别是通过、不符合、用法错误、内部错误；没有 FAIL 时退出码为 0，WARN 不影响 | vps-hardening `v0.1.1` `lib/vps-hardening/common.sh`、`verify.sh` |
 | 控制台创建的 Tunnel 使用 Cloudflare 下发的路由，忽略本地配置文件；要本地管理又用令牌运行，须用命令行创建 Tunnel | cloudflared issue #933、#633 中维护者的答复 |
 | 任何持有 Tunnel 令牌的人都能运行这个 Tunnel；令牌可以轮换，轮换后旧令牌不能建立新连接 | Cloudflare 文档 Tunnel permissions |
+| 设了 `sockopt.domainStrategy` 时，freedom 先按它解析域名以核对 `finalRules`，再以域名拨号，由拨号器按同一策略解析。`UseIPv6v4` 先只查 AAAA，查不到或出错才查 A；`UseIP` 同时查两者。拨号器在 `happyEyeballs` 的 `tryDelayMs`、`maxConcurrentTry` 都大于 0、地址至少两个、TCP、没有 `dialerProxy` 时竞速拨号（`prioritizeIPv6` 让 IPv6 排在前面；一个地址失败立即试下一个），否则在地址中随机选一个。`tryDelayMs` 默认为 0，即不竞速。`Force` 开头的取值在查不到地址时返回错误，不交给系统解析。设了 `sendThrough`（源地址）时，只查与源地址同一族的地址，不做回退查询。freedom 设置中的 `domainStrategy` 已弃用，构建配置时迁移到 `sockopt.domainStrategy`，行为不变 | Xray-core v26.10.21 `proxy/freedom/freedom.go`（`Process`）、`transport/internet/dialer.go`（`DialSystem`、`LookupForIP`）、`transport/internet/config.go`（`strategy`）、`transport/internet/happy_eyeballs.go`（`TcpRaceDial`、`sortIPs`）、`infra/conf/transport_sockopt.go`（`HappyEyeballsConfig`）、`infra/conf/xray.go`（freedom 的策略迁移），2026-10-31 |
