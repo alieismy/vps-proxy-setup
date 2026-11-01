@@ -350,17 +350,23 @@ apt_busy() {
   grep -qE '^/var/(lib/dpkg/lock(-frontend)?|lib/apt/lists/lock|cache/apt/archives/lock)$' <<<"$locks"
 }
 
-# Wait for first-boot work, then keep the APT timers from starting package
-# runs during a test (stopping a timer is runtime only). The tool's own apt.idle
-# judgement must agree.
+# Wait for first-boot work and for package runs already started. The APT
+# timers stay enabled and running, as vps-hardening verify requires after
+# apply (uu.timers); drop-ins in /run make the services they start no-ops
+# until the next boot, so no package run changes the host during a test, and
+# /etc stays as it is. The tool's own apt.idle judgement must agree.
 settle() {
-  local rc=0 deadline
+  local rc=0 deadline unit
   cloud-init status --wait >/dev/null 2>&1 || rc=$?
   case "$rc" in
     0 | 2) ;;
     *) fail "cloud-init status $rc" ;;
   esac
-  systemctl stop apt-daily.timer apt-daily-upgrade.timer
+  for unit in apt-daily.service apt-daily-upgrade.service; do
+    install -d -m 0755 "/run/systemd/system/$unit.d"
+    printf '[Service]\nExecStart=\nExecStart=/bin/true\n' >"/run/systemd/system/$unit.d/vps-test.conf"
+  done
+  systemctl daemon-reload
   deadline=$((SECONDS + 1200))
   while apt_busy || vps_fn package_manager_busy; do
     [ "$SECONDS" -lt "$deadline" ] || fail 'package manager still busy after 20 minutes'
