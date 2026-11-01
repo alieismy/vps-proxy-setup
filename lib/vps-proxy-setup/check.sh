@@ -291,8 +291,11 @@ read_deploy_record() {
   VPS_RECORD_JSON="$(jq -cn "${args[@]}" '$ARGS.named')"
 }
 
+# Sets VPS_XUI_VERSION_OK and VPS_XUI_FILES_OK; deploy step 4 tells a
+# replaced file (solution design SR-9) from other failures by the latter.
 ck_xui_program() {
   local out i path want got bad=() pending=()
+  VPS_XUI_FILES_OK=0
   if out="$(timeout --kill-after=5 10 "$VPS_XUI_BIN" -v 2>/dev/null)" && [ "$out" = "$VPS_PIN_XUI_VERSION" ]; then
     report PASS xui.version "3X-UI $VPS_PIN_XUI_VERSION"
     VPS_XUI_VERSION_OK=1
@@ -320,6 +323,7 @@ ck_xui_program() {
     report FAIL xui.files "还没有固定的摘要（验证计划 VO-1）：$(join_by ' ' "${pending[@]}")"
   else
     report PASS xui.files '程序文件与固定的摘要一致'
+    VPS_XUI_FILES_OK=1
   fi
 }
 

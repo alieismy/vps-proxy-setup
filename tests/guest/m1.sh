@@ -59,6 +59,25 @@ vps_fn() {
   )
 }
 
+# deploy_fn FUNC ARGS...: FUNC in a subshell with every module of the tool
+# loaded, as bin/vps-proxy-setup loads them; the M2 drivers call the deploy
+# steps this way (detailed design 19).
+deploy_fn() {
+  (
+    . "$LIB/common.sh"
+    . "$LIB/pins.sh"
+    . "$LIB/platform.sh"
+    . "$LIB/inputs.sh"
+    . "$LIB/probe.sh"
+    . "$LIB/xuidb.sh"
+    . "$LIB/preflight.sh"
+    . "$LIB/check.sh"
+    . "$LIB/target.sh"
+    . "$LIB/deploy.sh"
+    "$@"
+  )
+}
+
 # pin_value NAME: a pinned value of pins.sh, through vps_fn.
 pin_value() {
   printf '%s
@@ -85,19 +104,21 @@ capture() {
 }
 
 # on_tty ERR CMD...: CMD on a new pseudo-terminal, as deploy requires. The
-# only input is end of file. The command's stderr goes to the file ERR instead
-# of the terminal, so the two streams can be told apart. CMD is executed
-# directly: it cannot be a shell function.
+# only input is end of file, or with TTY_INPUT set in the environment that one
+# line, as the administrator would type it. The command's stderr goes to the
+# file ERR instead of the terminal, so the two streams can be told apart. CMD
+# is executed directly: it cannot be a shell function.
 on_tty() {
   timeout --kill-after=10 600 python3 -c '
 import os, pty, sys
+answer = os.environ.pop("TTY_INPUT", None)
 pid, fd = pty.fork()
 if pid == 0:
     f = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.dup2(f, 2)
     os.close(f)
     os.execvp(sys.argv[2], sys.argv[2:])
-os.write(fd, b"\x04")
+os.write(fd, b"\x04" if answer is None else answer.encode() + b"\n")
 out = bytearray()
 while True:
     try:
@@ -980,7 +1001,9 @@ phase_vt01() {
   observe vt01 capture_tty "$TOOL" deploy --input "$input"
   expect_rc vt01 1
   expect_clean vt01
-  expect_err vt01 '[x] 预检通过；之后的步骤在 M2 实现，主机未改动'
+  # The change plan is shown; end of file at the confirmation cancels (detailed design 2.5).
+  expect_err vt01 '输入 yes 继续'
+  expect_err vt01 '[x] 已取消，主机未改动'
   expect_report vt01 PASS "${PREFLIGHT_PASS[@]}"
   expect_report vt01 WARN inputs.node_ip
   expect_report vt01 INFO inputs.sub_host inputs.target inputs.remark inputs.users inputs.ipv6_ai_egress \
@@ -1575,9 +1598,14 @@ main() {
     vt72) phase_vt72 ;;
     vt75) phase_vt75 ;;
     inject) phase_inject "${2:?injection name}" ;;
-    *) fail "unknown phase: $phase" ;;
+    *)
+      # Phases of a script that sources this one (tests/guest/m2.sh).
+      declare -F "phase_${phase//-/_}" >/dev/null || fail "unknown phase: $phase"
+      "phase_${phase//-/_}" "${@:2}"
+      ;;
   esac
   log "phase $* passed"
 }
 
-main "$@"
+# Sourced by tests/guest/m2.sh for its helpers; it calls main itself.
+[ "${BASH_SOURCE[0]}" != "$0" ] || main "$@"

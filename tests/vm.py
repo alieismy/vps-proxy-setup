@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""M1 VM tests: run vps-proxy-setup in disposable QEMU guests.
+"""M1 and M2 VM tests: run vps-proxy-setup in disposable QEMU guests.
 
 Adapted from vps-hardening's tests/vm.py (detailed design 9.1); Debian 13
 amd64 only (NFR-03). Both suites first build the main configuration of
@@ -17,8 +17,14 @@ from a local asset directory. Suites:
                 overlays of it the baseline with VT-74 to VT-76 and VT-73,
                 VT-72 with DO-1 and VT-75, then one overlay per VT-71
                 injection, each judged here against the baseline.
+  m2-deploy     one guest with the namespaces, the stand-in and a fresh
+                target-check result: VT-11; then one overlay of it each for
+                VT-10 (deploy steps 1 to 4, with VT-13 on its output), VT-12
+                (with VT-13 on the real installer output) and VT-13 with a
+                failing installer.
 
-tests/guest/m1.sh is the guest side and judges everything except VT-71.
+tests/guest/m1.sh is the guest side of M1 and judges everything except
+VT-71; tests/guest/m2.sh, which sources it, the guest side of M2.
 Evidence goes to .tmp/vm/evidence; it is scanned for the test secrets, also
 when the suite fails, and listed with sizes and digests (verification plan 6).
 """
@@ -240,15 +246,15 @@ class Guest:
         tail = '\n'.join(text.splitlines()[-lines:])
         print(f'--- {self.label} {title}\n{self.ctx.redact(tail)}', flush=True)
 
-    def phase(self, name, *args, required=False, timeout=1800):
-        """Run one phase of tests/guest/m1.sh in a new session. A failed
+    def phase(self, name, *args, required=False, timeout=1800, script='m1.sh'):
+        """Run one phase of tests/guest/SCRIPT in a new session. A failed
         phase fails the run; a required one also stops it."""
         words = (name,) + args
         title = ' '.join(words)
         self.collected.append('-'.join(words))
         print('START', self.label, title, flush=True)
         log_path = self.evidence / ('-'.join(words) + '.log')
-        command = f'bash {BUNDLE}/tests/guest/m1.sh {title}'
+        command = f'bash {BUNDLE}/tests/guest/{script} {title}'
 
         def body():
             with log_path.open('wb') as log:
@@ -616,7 +622,21 @@ def m1_check(ctx, main):
                         expected)
 
 
-SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check}
+def m2_deploy(ctx, main):
+    disk = ctx.overlay(main, 'm2.qcow2')
+    with Guest(ctx, 'm2', disk) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('vt11', script='m2.sh')
+        guest.poweroff()
+    # The input file, the test token and a fresh target-check result are on this disk.
+    for name in ('vt10', 'vt12', 'vt13-fail'):
+        with Guest(ctx, name, ctx.overlay(disk, f'{name}.qcow2')) as guest:
+            guest.phase(name, script='m2.sh')
+            guest.poweroff()
+
+
+SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy}
 
 
 def main():

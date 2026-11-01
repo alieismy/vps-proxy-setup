@@ -12,17 +12,18 @@ permissions:
   contents: read
 
 jobs:
-  # M1 on Debian 13 amd64 (detailed design 9.1, 9.3). Both jobs first build
-  # the main configuration: vps-tuning, vps-hardening v0.1.1, this tool from
-  # its release installer.
+  # M1 and M2 on Debian 13 amd64 (detailed design 9.1, 9.3). Every job
+  # first builds the main configuration: vps-tuning, vps-hardening v0.1.1,
+  # this tool from its release installer.
   #   m1-preflight: VT-80, VT-81, VT-01 to VT-05.
   #   m1-check: S1 baseline, VT-71 (M1 part), VT-72 to VT-76.
+  #   m2-deploy: VT-10 to VT-13 (deploy steps 1 to 4).
   vm:
     name: ${{ matrix.suite }}
     strategy:
       fail-fast: false
       matrix:
-        suite: [m1-preflight, m1-check]
+        suite: [m1-preflight, m1-check, m2-deploy]
     runs-on: ubuntu-24.04
     # m1-check boots about twenty guests: the main configuration, S1 and one
     # overlay per injection.
