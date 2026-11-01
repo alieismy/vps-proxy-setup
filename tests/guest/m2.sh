@@ -110,9 +110,9 @@ phase_vt10() {
 }
 
 # The seam of detailed design 19 for VT-12 and VT-13, run through deploy_fn:
-# the real steps 2 and 3; the filtered end of the real installer output; one
-# installed file replaced; the real step 4. Exit status 2 means the driver
-# itself failed.
+# the real steps 2 and 3; the filter over the whole real installer output (the
+# credentials come before its last 20 lines) and the end shown; one installed
+# file replaced; the real step 4. Exit status 2 means the driver itself failed.
 # shellcheck disable=SC2031 # runs inside deploy_fn, where deploy_install sets VPS_INSTALL_LOG
 vt12_steps() {
   trap vps_cleanup EXIT
@@ -121,6 +121,7 @@ vt12_steps() {
   deploy_prefetch
   deploy_install || { printf 'driver: the installer exited with %s\n' "$?" >&2; exit 2; }
   install -m 0600 "$VPS_INSTALL_LOG" "$PRIVATE/vt12-install.log"
+  install_log_filtered >"$PRIVATE/vt13-filtered.txt" || true
   printf '== install_log_tail\n' >&2
   install_log_tail
   printf '== step 4\n' >&2
@@ -132,7 +133,7 @@ vt12_steps() {
 }
 
 phase_vt12() {
-  local port i listen_rows
+  local port i listen_rows raw kept lines
   settle
   port="$(state_value panel_port)"
   capture vt12 deploy_fn vt12_steps
@@ -163,9 +164,15 @@ PY
   [ "$listen_rows" = 0 ] || fail 'vt12: webListen was written'
 
   # VT-13 on the real output of the installer: it holds the credentials, the
-  # end shown does not.
-  grep -qF -f "$PRIVATE/markers" "$PRIVATE/vt12-install.log" ||
-    fail 'vt13: the installer output holds none of the credentials; the filter test would prove nothing'
+  # whole of it filtered and the end shown do not. Only counts are archived.
+  raw="$(grep -cF -f "$PRIVATE/markers" "$PRIVATE/vt12-install.log" || true)"
+  kept="$(grep -cF -f "$PRIVATE/markers" "$PRIVATE/vt13-filtered.txt" || true)"
+  lines="$(wc -l <"$PRIVATE/vt13-filtered.txt")"
+  printf 'installer output: %s lines with a test secret; filtered: %s lines, %s with a test secret\n' \
+    "$raw" "$lines" "$kept" | tee "$phase_dir/vt13-filter.txt"
+  [ "$raw" -gt 0 ] || fail 'vt13: the installer output holds none of the credentials; the filter test would prove nothing'
+  [ "$kept" = 0 ] || fail 'vt13: the filtered installer output holds a test secret'
+  [ "$lines" -gt 0 ] || fail 'vt13: the filter removed every line'
   sed -n '/^== install_log_tail$/,/^== step 4$/p' "$phase_dir/vt12.err" >"$phase_dir/vt13-tail.txt"
   grep -q '^    ' "$phase_dir/vt13-tail.txt" || fail 'vt13: the filtered end of the installer output is empty'
   expect_no_secret vt12

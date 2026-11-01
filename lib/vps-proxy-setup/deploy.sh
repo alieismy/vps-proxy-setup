@@ -35,7 +35,7 @@ deploy_stop() {
 }
 
 # The documented cleanup of solution design 7.3; nothing is rolled back (FR-12).
-readonly VPS_CLEANUP_HINT='这台主机已部分安装 3X-UI，不会自动回滚。请按清理步骤处理（方案设计第 7.3 节：x-ui uninstall 之后恢复 vps-tuning 的 90-proxy-vps.conf，删除 /etc/vps-proxy-setup/），预检和 vps-tuning 的严格验证都通过后再部署'
+readonly VPS_CLEANUP_HINT='这台主机可能已部分安装 3X-UI，不会自动回滚。请按清理步骤处理（方案设计第 7.3 节：x-ui uninstall 之后恢复 vps-tuning 的 90-proxy-vps.conf，删除 /etc/vps-proxy-setup/），预检和 vps-tuning 的严格验证都通过后再部署'
 
 deploy_step() {
   printf '\n== 第 %s 步：%s\n' "$1" "$2"
@@ -220,15 +220,18 @@ install_result_values() {
     sed 's#^/##; s#/$##' | awk 'length($0) >= 8'
 }
 
-# The end of the installer's output without the lines that carry credentials,
-# the access URL or the token (VT-13): every line with one of the words the
-# installer prints them after, and every line with one of the values.
+# The installer's output without colours and without the lines that carry
+# credentials, the access URL or the token (VT-13): every line with one of the
+# words the installer prints them after, and every line with one of the values.
+install_log_filtered() {
+  sed 's/\x1b\[[0-9;]*m//g' -- "$VPS_INSTALL_LOG" 2>/dev/null |
+    grep -viE 'user|pass|token|path|url|http|key|secret|dsn' |
+    grep -vF -f <(install_result_values)
+}
+
+# The end of the filtered output, on stderr.
 install_log_tail() {
-  {
-    sed 's/\x1b\[[0-9;]*m//g' -- "$VPS_INSTALL_LOG" 2>/dev/null |
-      grep -viE 'user|pass|token|path|url|http|key|secret|dsn' |
-      grep -vF -f <(install_result_values) | tail -n 20 | sed 's/^/    /'
-  } >&2 || true
+  { install_log_filtered | tail -n 20 | sed 's/^/    /'; } >&2 || true
 }
 
 # wait_panel_loopback: after the restart, the panel listens on loopback only.
