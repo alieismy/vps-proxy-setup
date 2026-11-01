@@ -32,6 +32,8 @@ def ip_literal: ipv4_ok or (type == "string" and contains(":") and test("^[0-9A-
 def norm_rule: if type != "object" then null
   else (if has("type") then (if .type == "field" then del(.type) else . + {"__type": .type} end) else . end)
      | (if has("enabled") and .enabled == true then del(.enabled) else . end) end;
+def api_rule: type == "object" and .outboundTag == "api"
+  and (.inboundTag | if type == "array" then any(.[]; . == "api") else . == "api" end);
 
 ($snap.settings // {}) as $set |
 def raw($k): ($set[$k] // {"n": 0});
@@ -129,9 +131,11 @@ $snap.template as $t |
           {"inboundTag": [$f.tag], "outboundTag": "blocked"},
           {"inboundTag": [$r.tag], "domain": ["geosite:cn"], "outboundTag": "blocked"},
           {"inboundTag": [$r.tag], "ip": ["geoip:cn"], "outboundTag": "blocked"} ] as $want
-   | [ range(0; 4) as $i | select(($rules[$i] | norm_rule) != $want[$i]) | $i + 1 | tostring ] as $bad
-   | if ($bad | length) == 0 then v("PASS"; "前四条规则依次是方案设计第 7.4 节的规则 1～4")
-     else v("FAIL"; "第 \($bad | join("、")) 条规则不是方案设计第 7.4 节的对应规则") end end),
+   | [ range(0; 4) as $i | select(($rules[$i + 1] | norm_rule) != $want[$i]) | $i + 1 | tostring ] as $bad
+   | verdict([
+     (if $rules[0] | api_rule | not then "第一条规则不是 api 规则（3X-UI 保存模板时把它固定在第一条）" else empty end),
+     (if ($bad | length) > 0 then "api 规则之后的第 \($bad | join("、")) 条不是方案设计第 7.4 节的对应规则" else empty end)
+   ]; "第一条是 api 规则，其后依次是方案设计第 7.4 节的规则 1～4") end),
 
 "routing.outbounds":
   (if $t.n > 0 and $t.valid != 1 then v("FAIL"; "xrayTemplateConfig 不是有效的 JSON")
@@ -152,7 +156,7 @@ $snap.template as $t |
      elif $r == null then v("SKIP"; $no_r)
      elif $t.n > 0 and $t.valid != 1 then v("FAIL"; "xrayTemplateConfig 不是有效的 JSON")
      else ([ $obs[] | select(.tag == "direct") ][0].finalRules) as $dfr
-     | ($rules[4] | norm_rule) as $r5
+     | ($rules[5] | norm_rule) as $r6
      | verdict([
        (if ($ai | length) != 1 then "标签为 ai-ipv6 的出站不正好一个"
         else $ai[0] as $o
@@ -162,12 +166,12 @@ $snap.template as $t |
           (if $o.streamSettings != {"sockopt": {"domainStrategy": "ForceIPv6v4"}} then "ai-ipv6 出站的 streamSettings 不是只有 sockopt.domainStrategy=ForceIPv6v4" else empty end)
         end),
        (if ($obs[0].tag // null) != "direct" then "第一个出站不是 direct" else empty end),
-       (if ($r5 | type) != "object" or ($r5 | del(.domain)) != {"inboundTag": [$r.tag], "outboundTag": "ai-ipv6"}
-          or ($r5.domain | type) != "array" or ($r5.domain | sort) != ["geosite:anthropic", "geosite:openai"]
-        then "第五条规则不是 REALITY 入站的 geosite:openai、geosite:anthropic 到 ai-ipv6" else empty end),
+       (if ($r6 | type) != "object" or ($r6 | del(.domain)) != {"inboundTag": [$r.tag], "outboundTag": "ai-ipv6"}
+          or ($r6.domain | type) != "array" or ($r6.domain | sort) != ["geosite:anthropic", "geosite:openai"]
+        then "第六条规则（api 规则和规则 1～4 之后）不是 REALITY 入站的 geosite:openai、geosite:anthropic 到 ai-ipv6" else empty end),
        (if ([ $rules[] | select(.outboundTag? == "ai-ipv6") ] | length) > 1 then "还有别的规则指向 ai-ipv6" else empty end),
        (if $t.has_dns == 1 then "模板中有 dns" else empty end)
-     ]; "ai-ipv6 出站和第五条规则符合详细设计第 4.4 节（只核对配置，不核对私有地址屏蔽的内容）") end end),
+     ]; "ai-ipv6 出站和第六条规则符合详细设计第 4.4 节（只核对配置，不核对私有地址屏蔽的内容）") end end),
 
 "clients.count":
   (if $r == null then v("SKIP"; $no_r)
