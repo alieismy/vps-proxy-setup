@@ -6,11 +6,14 @@ one certificate of the per-run test CA, each host with its own fixed body.
 --mode strict routes by SNI and ignores Host and :authority; --mode cross
 routes by Host or :authority, as a server that mixes virtual hosts would, so
 that the cross-authority probes of target-check have something to find
-(VT-81). An unknown host gets 404.
+(VT-81). An unknown host gets 404. --large adds 32 MiB to every body, far
+over the 4 MiB that target-check reads (detailed design 5), so a client that
+stops there leaves most of each body unsent.
 
 Every TCP connection is logged as one JSON line: time, peer, SNI, ALPN and,
-for each request, the protocol, the Host or :authority received, the path and
-the status. The authority actually received is the evidence of DO-8.
+for each request, the protocol, the Host or :authority received, the path,
+the status and whether the body was sent to the end. The authority actually
+received is the evidence of DO-8.
 """
 import argparse
 import json
@@ -29,6 +32,7 @@ BODIES = {
     'other.example': b'stand-in other.example\n',
 }
 REASONS = {200: 'OK', 404: 'Not Found'}
+LARGE = 32 << 20
 
 
 def text(value):
@@ -38,6 +42,8 @@ def text(value):
 class StandIn:
     def __init__(self, args):
         self.mode = args.mode
+        self.large = args.large
+        self.bodies = {name: body + b'.' * LARGE if args.large else body for name, body in BODIES.items()}
         self.log_path = args.log
         self.log_lock = threading.Lock()
         self.sni = {}
@@ -58,8 +64,27 @@ class StandIn:
 
     def route(self, sni, host):
         name = sni if self.mode == 'strict' else (host or '').rsplit(':', 1)[0].lower()
-        body = BODIES.get(name or '')
+        body = self.bodies.get(name or '')
         return (200, body) if body else (404, b'not found\n')
+
+    @staticmethod
+    def h2_body(conn, h2c, stream_id, body):
+        """Send BODY in frames within the flow-control window, reading the
+        client's WINDOW_UPDATE frames while the window is closed."""
+        view = memoryview(body)
+        while view:
+            size = min(len(view), h2c.local_flow_control_window(stream_id), h2c.max_outbound_frame_size)
+            if size == 0:
+                conn.sendall(h2c.data_to_send())
+                data = conn.recv(65535)
+                if not data:
+                    raise ConnectionError('closed while the flow-control window was closed')
+                h2c.receive_data(data)
+                continue
+            h2c.send_data(stream_id, view[:size].tobytes())
+            view = view[size:]
+            conn.sendall(h2c.data_to_send())
+        h2c.end_stream(stream_id)
 
     def http1(self, conn, sni, record):
         data = b''
@@ -76,10 +101,14 @@ class StandIn:
             headers[key.strip().lower()] = value.strip()
         host = headers.get('host', '')
         status, body = self.route(sni, host)
+        # Logged before the body: a client that stops reading ends the send.
+        request = {'proto': 'http/1.1', 'host': host, 'path': words[1] if len(words) > 1 else '',
+                   'status': status, 'complete': False}
+        record['requests'].append(request)
         conn.sendall(f'HTTP/1.1 {status} {REASONS[status]}\r\nContent-Type: text/plain\r\n'
-                     f'Content-Length: {len(body)}\r\nConnection: close\r\n\r\n'.encode() + body)
-        record['requests'].append({'proto': 'http/1.1', 'host': host,
-                                   'path': words[1] if len(words) > 1 else '', 'status': status})
+                     f'Content-Length: {len(body)}\r\nConnection: close\r\n\r\n'.encode())
+        conn.sendall(body)
+        request['complete'] = True
 
     def http2(self, conn, sni, record):
         h2c = h2.connection.H2Connection(config=h2.config.H2Configuration(client_side=False))
@@ -99,11 +128,18 @@ class StandIn:
                     headers = {text(k): text(v) for k, v in event.headers}
                     authority = headers.get(':authority', '')
                     status, body = self.route(sni, authority)
+                    request = {'proto': 'h2', 'authority': authority, 'host': headers.get('host'),
+                               'path': headers.get(':path', ''), 'status': status, 'complete': False}
+                    record['requests'].append(request)
                     h2c.send_headers(event.stream_id, [(':status', str(status)), ('content-type', 'text/plain'),
                                                        ('content-length', str(len(body)))])
-                    h2c.send_data(event.stream_id, body, end_stream=True)
-                    record['requests'].append({'proto': 'h2', 'authority': authority, 'host': headers.get('host'),
-                                               'path': headers.get(':path', ''), 'status': status})
+                    try:
+                        self.h2_body(conn, h2c, event.stream_id, body)
+                    except h2.exceptions.ProtocolError as e:
+                        # The client reset the stream while the body was being sent.
+                        record['error'] = f'h2: {e}'
+                        return
+                    request['complete'] = True
                 elif isinstance(event, h2.events.ConnectionTerminated):
                     conn.sendall(h2c.data_to_send())
                     return
@@ -114,6 +150,8 @@ class StandIn:
     def serve(self, raw, peer):
         record = {'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'mode': self.mode,
                   'peer': f'{peer[0]}:{peer[1]}', 'requests': []}
+        if self.large:
+            record['large'] = True
         conn = None
         try:
             raw.settimeout(20)
@@ -138,6 +176,7 @@ class StandIn:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['strict', 'cross'], required=True)
+    parser.add_argument('--large', action='store_true', help='add 32 MiB to every body')
     parser.add_argument('--listen', default='198.51.100.2')
     parser.add_argument('--port', type=int, default=443)
     parser.add_argument('--cert', required=True, help='leaf certificate followed by the test CA')

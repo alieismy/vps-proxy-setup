@@ -178,6 +178,7 @@ etc_dir_only_target_checks() {
 pf_ports_free() {
   local port state busy=() ports=("$VPS_PORT_REALITY" "${VPS_LOOPBACK_PORTS[@]}")
   [ -z "$VPS_PANEL_PORT" ] || ports+=("$VPS_PANEL_PORT")
+  tcp_listeners_load
   for port in "${ports[@]}"; do
     if ! state="$(port_state "$port")"; then
       report FAIL ports.free '无法读取监听端口（ss）'

@@ -264,7 +264,11 @@ main() {
       die "$name 不是普通目录"
     fi
   done
-  [ ! -e "$BIN_PATH" ] || [ -f "$BIN_PATH" ] || die "$BIN_PATH 不是普通文件"
+  # A symbolic link is refused, as for the directories; a dangling one would
+  # also escape the backup below and be lost on a rollback.
+  if [ -L "$BIN_PATH" ] || { [ -e "$BIN_PATH" ] && [ ! -f "$BIN_PATH" ]; }; then
+    die "$BIN_PATH 不是普通文件"
+  fi
 
   install -d -o root -g root -m 0755 /usr/local/bin "$LIB_PARENT" "$SHARE_PARENT"
   # Assigned before staging so that cleanup removes a partly staged directory.

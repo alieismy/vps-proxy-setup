@@ -23,7 +23,8 @@ case "$list" in
 esac
 patterns="$(mktemp)"
 trap 'rm -f -- "$patterns"' EXIT
-grep -vE '^[[:space:]]*(#|$)' "$list" >"$patterns" || fail 'the private list has no entries'
+# A list saved with CRLF would keep \r in every pattern and match nothing.
+tr -d '\r' <"$list" | grep -vE '^[[:space:]]*(#|$)' >"$patterns" || fail 'the private list has no entries'
 
 found=0
 # Working tree: tracked files and new files not yet added.

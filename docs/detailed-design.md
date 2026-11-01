@@ -503,7 +503,7 @@ M1 实现安装脚本并用 `--source-dir` 在本地验证；发布和从公开�
 
 | 用例 | 作业 | 实现 |
 |---|---|---|
-| VT-80、VT-81 | `m1-preflight` | 在主配置上对 `target.example` 执行 `target-check`，分别在信任和不信任测试 CA 时；替身切换两种路由方式，交叉路由时 `--probe-host other.example`。在客体上用 `tcpdump` 记录测试期间的出站连接，判定只有到 `198.51.100.2:443` 的连接（`/etc/hosts` 解析，没有 DNS 查询）；只保留地址、端口、时间和 SNI。VT-81 的结果同时检验测试驱动本身（验证计划 VR-9） |
+| VT-80、VT-81 | `m1-preflight` | 在主配置上对 `target.example` 执行 `target-check`，分别在信任和不信任测试 CA 时；替身切换两种路由方式，交叉路由时 `--probe-host other.example`。在客体上用 `tcpdump` 记录测试期间的出站连接，判定只有到 `198.51.100.2:443` 的连接（`/etc/hosts` 解析，没有 DNS 查询）；只保留地址、端口、时间和 SNI。VT-81 的结果同时检验测试驱动本身（验证计划 VR-9）。抓包之后，替身给每个正文加 32 MiB 再做一次交叉路由：`target-check` 每次最多读 4 MiB（第 5 节），仍按内容判为不符合，替身记录没有一个正文发送到末尾 |
 | VT-01 | `m1-preflight` | 先在信任测试 CA 时执行 `target-check target.example`，再采集"执行前"的状态摘要。输入文件含全部六项，令牌为每次运行生成的测试令牌（验证计划第 3.4 节）。经伪终端执行 `deploy --input`，判定各项预检通过（`inputs.node_ip` 因文档地址为警告）、标准错误中是"之后的步骤在 M2 实现"、退出码 1、前后状态摘要一致；再以标准输入不是终端的方式执行一次，判定退出码 2、状态不变 |
 | VT-02 | `m1-preflight` | S1、S2、S3 各一个覆盖层，分别判定 `new-host.xui`、`new-host.xui-db`、`new-host.cloudflared` 不符合，退出码 1，状态不变 |
 | VT-03 | `m1-preflight` | 一张表：每个输入项至少一个不合法的值，其中包括节点地址为主机名、使用者代号重复、备注没有国旗、令牌不是 Base64、令牌的 `t` 不是 UUID、`--migrate` 时出现 `remark`；另有含国旗的合法 UTF-8 备注。判定退出码 2、标准错误中有对应的键、没有回显令牌，合法备注被接受 |

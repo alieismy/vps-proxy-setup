@@ -36,8 +36,10 @@ jobs:
           if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
       - name: Run the ${{ matrix.suite }} suite
         run: python3 tests/vm.py --suite '${{ matrix.suite }}'
+      # Only after the leak scan: vm.py writes MANIFEST.json after it, so a run
+      # that was killed or timed out before the scan uploads nothing.
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && hashFiles('.tmp/vm/evidence/MANIFEST.json') != ''
         with:
           name: vm-${{ matrix.suite }}
           path: .tmp/vm/evidence/

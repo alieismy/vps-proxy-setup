@@ -649,7 +649,9 @@ ck_cloudflared() {
 
   loopback_item cfd.metrics "$VPS_PORT_CFD_METRICS" 'cloudflared metrics'
 
-  if ready="$(curl -sS --max-time 5 -w '\n%{http_code}' "http://127.0.0.1:$VPS_PORT_CFD_METRICS/ready" 2>/dev/null)" &&
+  # --noproxy: curl also sends loopback requests to an inherited http_proxy.
+  if ready="$(curl -sS --noproxy '*' --max-time 5 -w '\n%{http_code}' \
+    "http://127.0.0.1:$VPS_PORT_CFD_METRICS/ready" 2>/dev/null)" &&
     [ "${ready##*$'\n'}" = 200 ] &&
     jq -e '.readyConnections > 0' <<<"${ready%$'\n'*}" >/dev/null 2>&1; then
     report PASS cfd.ready 'cloudflared 已就绪，有连接'
@@ -683,7 +685,7 @@ ck_cfd_routes() {
     report FAIL cfd.routes '没有可核对的订阅主机名'
     return 0
   fi
-  if ! cfg="$(curl -sS --max-time 5 "http://127.0.0.1:$VPS_PORT_CFD_METRICS/config" 2>/dev/null)"; then
+  if ! cfg="$(curl -sS --noproxy '*' --max-time 5 "http://127.0.0.1:$VPS_PORT_CFD_METRICS/config" 2>/dev/null)"; then
     report FAIL cfd.routes '/config 读取失败'
     return 0
   fi
@@ -709,6 +711,7 @@ cmd_check() {
   check_root_gate
   check_platform_gate
   deps_report deps "${VPS_CHECK_DEPS[@]}" || stop_at_gate
+  tcp_listeners_load
 
   VPS_XUI_VERSION_OK=0
   ck_xui_program

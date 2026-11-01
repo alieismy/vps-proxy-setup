@@ -641,21 +641,21 @@ trust_ca() {
   update-ca-certificates --fresh >/dev/null 2>&1
 }
 
-# standin strict|cross: (re)start the stand-in with that routing.
+# standin strict|cross [--large]: (re)start the stand-in with that routing.
 standin() {
   local i out
   systemctl stop vps-standin.service 2>/dev/null || true
   systemctl reset-failed vps-standin.service 2>/dev/null || true
   install -d -m 0700 "$EVIDENCE/standin"
   systemd-run --quiet --unit vps-standin -- ip netns exec vpsns-standin python3 "$BUNDLE/tests/guest/standin.py" \
-    --mode "$1" --cert "$CA_DIR/chain.crt" --key "$CA_DIR/leaf.key" --log "$EVIDENCE/standin/connections.jsonl"
+    --mode "$1" "${@:2}" --cert "$CA_DIR/chain.crt" --key "$CA_DIR/leaf.key" --log "$EVIDENCE/standin/connections.jsonl"
   for i in $(seq 50); do
     out="$(ip netns exec vpsns-standin ss -Hltn 'sport = :443')"
     [ -z "$out" ] || return 0
     [ "$i" -lt 50 ] || break
     sleep 0.2
   done
-  fail "the stand-in did not start ($1)"
+  fail "the stand-in did not start ($*)"
 }
 
 # A random Tunnel token in the format of detailed design 2.4 (verification
@@ -777,7 +777,8 @@ target_case() {
   shift 2
   observe_begin "$name"
   capture "$name" "$TOOL" target-check "$@"
-  observe_end "$name" '/etc/vps-proxy-setup( |/|$)'
+  # The two directories and the result file; any other file there is a change.
+  observe_end "$name" '/etc/vps-proxy-setup(/target-check(/target\.example)?)?( |$)'
   expect_rc "$name" "$rc"
   expect_clean "$name"
   expect_report "$name" INFO resolve tls.group
@@ -873,6 +874,17 @@ phase_vt80() {
   stop_capture
   start_time_sync
   judge_capture
+
+  # Bodies over 4 MiB (detailed design 5), after the capture: target-check reads
+  # 4 MiB of each and still finds the cross routing by content, and the
+  # stand-in could send none of the 32 MiB bodies to the end.
+  standin cross --large
+  target_case vt81-large 1 target.example --probe-host other.example
+  expect_fails vt81-large probe.host probe.authority
+  expect_report vt81-large PASS http.root
+  jq -s -e '[.[] | select(.large == true) | .requests[]] | length > 0 and all(.complete == false)' \
+    "$EVIDENCE/standin/connections.jsonl" >/dev/null || fail 'vt81-large: a body was read past 4 MiB'
+  standin strict
 }
 
 # ---------------------------------------------------------------------------

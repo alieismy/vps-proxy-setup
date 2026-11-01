@@ -383,7 +383,9 @@ class Context:
         spec = json.loads((ROOT / 'tests/platform-images.json').read_text())['debian13']['amd64']
         (self.evidence / 'image.json').write_text(json.dumps(spec, indent=2))
         image = self.work / 'base.qcow2'
-        urllib.request.urlretrieve(spec['url'], image)
+        # Bounded like the fixture download; the digest check below rejects a short file.
+        with urllib.request.urlopen(spec['url'], timeout=60) as response, image.open('wb') as out:
+            shutil.copyfileobj(response, out)
         with image.open('rb') as f:
             digest = hashlib.file_digest(f, spec['algorithm']).hexdigest()
         if digest != spec['digest']:

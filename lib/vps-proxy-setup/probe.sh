@@ -31,10 +31,17 @@ file_attrs() {
   stat -c '%F|%u|%a' -- "$1" 2>/dev/null
 }
 
-# TCP listeners as "ADDRESS PORT" lines, cached for the run. ss is read whole:
-# a reader that stops early would kill it with SIGPIPE (detailed design 8).
+# TCP listeners as "ADDRESS PORT" lines. The callers run in $(...), where the
+# cache would not survive; tcp_listeners_load fills it in the calling shell, so
+# the port checks after it share one ss read. ss is read whole: a reader that
+# stops early would kill it with SIGPIPE (detailed design 8).
 VPS_SS_CACHE=''
 VPS_SS_READ=0
+tcp_listeners_load() {
+  VPS_SS_READ=0
+  # On failure the cache stays empty and each port check reports it.
+  tcp_listeners >/dev/null || true
+}
 tcp_listeners() {
   local out line local_addr addr port
   if [ "$VPS_SS_READ" -eq 0 ]; then

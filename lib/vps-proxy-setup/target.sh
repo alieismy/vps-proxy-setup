@@ -46,12 +46,17 @@ now_ms() {
 }
 
 # http_fetch PROTO HOST_HEADER OUT_PREFIX: GET https://TARGET/ without following
-# redirects. Writes the body to OUT_PREFIX.body and prints
-# "STATUS SHA256 REDIRECT_URL" (redirect may be empty). Returns 1 when curl fails.
+# redirects. Writes at most VPS_BODY_MAX bytes of the body to OUT_PREFIX.body
+# and prints "STATUS SHA256 REDIRECT_URL" (redirect may be empty). Returns 1
+# when curl fails.
 http_fetch() {
-  local proto="$1" host="$2" out="$3" meta status redirect hash
-  local -a opts=(--silent --show-error --max-time "$VPS_TLS_TIMEOUT" --connect-timeout "$VPS_TLS_TIMEOUT"
-    --proto '=https' --output "$out.body" --write-out '%{http_code} %{redirect_url}')
+  local proto="$1" host="$2" out="$3" meta status redirect hash rc=0
+  # head stops the transfer at VPS_BODY_MAX (detailed design 5) and curl then
+  # ends with 23, a write error. The status goes to stderr, which carries
+  # nothing else without --show-error. --noproxy keeps these requests direct,
+  # like the TLS probe, when https_proxy is inherited.
+  local -a opts=(--silent --noproxy '*' --max-time "$VPS_TLS_TIMEOUT" --connect-timeout "$VPS_TLS_TIMEOUT"
+    --proto '=https' --output - --write-out '%{stderr}%{http_code} %{redirect_url}')
   if [ "$proto" = h2 ]; then
     opts+=(--http2)
   else
@@ -59,11 +64,17 @@ http_fetch() {
   fi
   [ "$VPS_TC_INSECURE" -eq 0 ] || opts+=(--insecure)
   [ "$host" = "$VPS_TC_TARGET" ] || opts+=(--header "Host: $host")
-  meta="$(curl "${opts[@]}" "https://$VPS_TC_TARGET/" 2>/dev/null)" || return 1
+  curl "${opts[@]}" "https://$VPS_TC_TARGET/" 2>"$out.meta" | head -c "$VPS_BODY_MAX" >"$out.body" || rc=$?
+  case "$rc" in
+    0) ;;
+    23) [ "$(wc -c <"$out.body")" -eq "$VPS_BODY_MAX" ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  meta="$(<"$out.meta")"
   status="${meta%% *}"
   redirect="${meta#* }"
   [ "$redirect" != "$meta" ] || redirect=''
-  hash="$(head -c "$VPS_BODY_MAX" -- "$out.body" | sha256sum)" || return 1
+  hash="$(sha256sum <"$out.body")" || return 1
   printf '%s %s %s\n' "$status" "${hash%% *}" "$redirect"
 }
 

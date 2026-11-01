@@ -50,13 +50,13 @@ if ! grep -qx "INSTALLER_VERSION='$version'" install.sh || ! grep -qx "RELEASE_T
 fi
 printf '[+] installer assets and version\n'
 
-if git grep -lI $'\r' -- .; then
+if git grep -lI --untracked $'\r' -- .; then
   fail 'files above contain CR characters; the repository uses LF only'
 fi
 printf '[+] LF line endings\n'
 
 # Private keys and common token formats.
-if git grep -nIE \
+if git grep -nIE --untracked \
   -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
   -e 'gh[pousr]_[A-Za-z0-9]{36}' \
   -e 'github_pat_[A-Za-z0-9_]{22,}' \
