@@ -122,8 +122,13 @@ vps_tmp_init() {
   fi
 }
 
+# Said on stderr when the process exits before a command clears it: an
+# internal error or a signal ended the command before its result was in place.
+VPS_EXIT_NOTE=''
+
 vps_cleanup() {
   local path
+  [ -z "$VPS_EXIT_NOTE" ] || printf '%s\n' "$VPS_EXIT_NOTE" >&2 || true
   for path in "${VPS_CLEANUP[@]}"; do
     rm -f -- "$path"
   done

@@ -10,6 +10,9 @@ that the cross-authority probes of target-check have something to find
 every body and 32 MiB after it: the bodies differ only past the 4 MiB that
 target-check reads (detailed design 5), so they compare equal if, and only
 if, it stops there, and a client that stops leaves most of each body unsent.
+--http1-only offers only http/1.1 in ALPN, so an h2 client falls back to it.
+--delay SECONDS holds every HTTP response that long, for a client to be
+interrupted while it waits.
 
 Every TCP connection is logged as one JSON line: time, peer, SNI, ALPN and,
 for each request, the protocol, the Host or :authority received, the path,
@@ -45,6 +48,7 @@ class StandIn:
     def __init__(self, args):
         self.mode = args.mode
         self.large = args.large
+        self.delay = args.delay
         # Large: the host name sits right at PREFIX, and the two names differ in
         # their first byte.
         self.bodies = {name: b'.' * PREFIX + name.encode() + b'.' * LARGE if args.large else body
@@ -56,7 +60,7 @@ class StandIn:
         self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.ctx.minimum_version = ssl.TLSVersion.TLSv1_3
         self.ctx.load_cert_chain(args.cert, args.key)
-        self.ctx.set_alpn_protocols(['h2', 'http/1.1'])
+        self.ctx.set_alpn_protocols(['http/1.1'] if args.http1_only else ['h2', 'http/1.1'])
         self.ctx.sni_callback = self.on_sni
 
     def on_sni(self, conn, name, _ctx):
@@ -106,6 +110,7 @@ class StandIn:
             headers[key.strip().lower()] = value.strip()
         host = headers.get('host', '')
         status, body = self.route(sni, host)
+        time.sleep(self.delay)
         # Logged before the body: a client that stops reading ends the send.
         request = {'proto': 'http/1.1', 'host': host, 'path': words[1] if len(words) > 1 else '',
                    'status': status, 'complete': False}
@@ -133,6 +138,7 @@ class StandIn:
                     headers = {text(k): text(v) for k, v in event.headers}
                     authority = headers.get(':authority', '')
                     status, body = self.route(sni, authority)
+                    time.sleep(self.delay)
                     request = {'proto': 'h2', 'authority': authority, 'host': headers.get('host'),
                                'path': headers.get(':path', ''), 'status': status, 'complete': False}
                     record['requests'].append(request)
@@ -183,6 +189,8 @@ def main():
     parser.add_argument('--mode', choices=['strict', 'cross'], required=True)
     parser.add_argument('--large', action='store_true',
                         help='the same 4 MiB before every body and 32 MiB after it')
+    parser.add_argument('--http1-only', action='store_true', help='offer only http/1.1 in ALPN')
+    parser.add_argument('--delay', type=float, default=0, help='seconds to hold every HTTP response')
     parser.add_argument('--listen', default='198.51.100.2')
     parser.add_argument('--port', type=int, default=443)
     parser.add_argument('--cert', required=True, help='leaf certificate followed by the test CA')

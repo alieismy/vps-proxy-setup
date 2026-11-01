@@ -48,16 +48,17 @@ now_ms() {
 # http_fetch PROTO HOST_HEADER OUT_PREFIX: GET https://TARGET/ without following
 # redirects. Writes at most VPS_BODY_MAX bytes of the body to OUT_PREFIX.body
 # and prints "STATUS SHA256 REDIRECT_URL" (redirect may be empty). Returns 1
-# when curl fails.
+# when curl fails, and 2 when PROTO is h2 but the response came over another
+# version: --http2 falls back to HTTP/1.1 when ALPN does not select h2.
 http_fetch() {
-  local proto="$1" host="$2" out="$3" meta status redirect hash rc=0
+  local proto="$1" host="$2" out="$3" meta status rest version redirect hash rc=0
   # head stops the transfer at VPS_BODY_MAX (detailed design 5) and curl then
   # ends with 23, a write error. The status goes to stderr, which carries
   # nothing else without --show-error. --noproxy keeps these requests direct,
   # like the TLS probe, when https_proxy is inherited. -q, which must come
   # first, skips .curlrc: a "location" there would follow the redirects.
   local -a opts=(-q --silent --noproxy '*' --max-time "$VPS_TLS_TIMEOUT" --connect-timeout "$VPS_TLS_TIMEOUT"
-    --proto '=https' --output - --write-out '%{stderr}%{http_code} %{redirect_url}')
+    --proto '=https' --output - --write-out '%{stderr}%{http_code} %{http_version} %{redirect_url}')
   if [ "$proto" = h2 ]; then
     opts+=(--http2)
   else
@@ -73,8 +74,11 @@ http_fetch() {
   esac
   meta="$(<"$out.meta")"
   status="${meta%% *}"
-  redirect="${meta#* }"
-  [ "$redirect" != "$meta" ] || redirect=''
+  rest="${meta#* }"
+  version="${rest%% *}"
+  redirect="${rest#* }"
+  [ "$redirect" != "$rest" ] || redirect=''
+  [ "$proto" != h2 ] || [ "$version" = 2 ] || return 2
   hash="$(sha256sum <"$out.body")" || return 1
   printf '%s %s %s\n' "$status" "${hash%% *}" "$redirect"
 }
@@ -106,18 +110,30 @@ tc_check_root_deps() {
   tc_report PASS deps '依赖的命令齐全'
 }
 
+# fetch_failed STATUS WHAT: the reason, from http_fetch's STATUS, that the
+# request WHAT gave no usable response.
+fetch_failed() {
+  if [ "$1" -eq 2 ]; then
+    printf '%s没有协商到 HTTP/2（curl 改用了别的版本）' "$2"
+  else
+    printf '%s失败' "$2"
+  fi
+}
+
 # probe_judge ID PROTO: the cross-authority probe of detailed design 5.
 probe_judge() {
-  local id="$1" proto="$2" base1 base2 probe
+  local id="$1" proto="$2" base1 base2 probe rc=0
   local s1 h1 s2 h2 sp hp
   local clean='只能发现交叉路由，结果干净不证明隔离'
-  if ! base1="$(http_fetch "$proto" "$VPS_TC_TARGET" "$VPS_TMP/$id.base1")" ||
-    ! base2="$(http_fetch "$proto" "$VPS_TC_TARGET" "$VPS_TMP/$id.base2")"; then
-    tc_report WARN "$id" '以目标为 Host 的基准请求失败，无法比较'
+  base1="$(http_fetch "$proto" "$VPS_TC_TARGET" "$VPS_TMP/$id.base1")" &&
+    base2="$(http_fetch "$proto" "$VPS_TC_TARGET" "$VPS_TMP/$id.base2")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    tc_report WARN "$id" "$(fetch_failed "$rc" '以目标为 Host 的基准请求')，无法比较"
     return 0
   fi
-  if ! probe="$(http_fetch "$proto" "$VPS_TC_PROBE" "$VPS_TMP/$id.probe")"; then
-    tc_report WARN "$id" "探测请求（Host 为 $VPS_TC_PROBE）失败，无法判定"
+  probe="$(http_fetch "$proto" "$VPS_TC_PROBE" "$VPS_TMP/$id.probe")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    tc_report WARN "$id" "$(fetch_failed "$rc" "探测请求（Host 为 $VPS_TC_PROBE）")，无法判定"
     return 0
   fi
   read -r s1 h1 _ <<<"$base1"
@@ -139,12 +155,15 @@ probe_judge() {
 tc_publish() {
   local tmp line result=PASS
   [ "$VPS_COUNT_FAIL" -eq 0 ] || result=FAIL
+  # Each failure below says itself that nothing was published.
   if ! { [ -d "$VPS_ETC_DIR" ] || mkdir -m 0700 -- "$VPS_ETC_DIR"; } 2>/dev/null ||
     ! { [ -d "$VPS_TARGET_DIR" ] || mkdir -m 0700 -- "$VPS_TARGET_DIR"; } 2>/dev/null; then
+    VPS_EXIT_NOTE=''
     printf '[x] 无法创建 %s，结果未发布\n' "$VPS_TARGET_DIR" >&2
     return 1
   fi
   tmp="$(mktemp -- "$VPS_TARGET_DIR/.$VPS_TC_TARGET.XXXXXXXX" 2>/dev/null)" || {
+    VPS_EXIT_NOTE=''
     printf '[x] 无法在 %s 中写入，结果未发布\n' "$VPS_TARGET_DIR" >&2
     return 1
   }
@@ -161,15 +180,19 @@ tc_publish() {
     } >"$tmp" 2>/dev/null && chmod 0600 -- "$tmp" 2>/dev/null &&
       mv -f -- "$tmp" "$VPS_TARGET_DIR/$VPS_TC_TARGET" 2>/dev/null
   }; then
+    VPS_EXIT_NOTE=''
     printf '[x] 写入 %s 失败，结果未发布\n' "$VPS_TARGET_DIR/$VPS_TC_TARGET" >&2
     return 1
   fi
+  # Published: cleared before any output, so a failure to print cannot
+  # report the new record as not updated.
+  VPS_EXIT_NOTE=''
   printf '\n结果已写入 %s\n' "$VPS_TARGET_DIR/$VPS_TC_TARGET"
 }
 
 cmd_target_check() {
   local arg resolved addrs out ms list sorted min med max status ok=0 first='' version alpn verify
-  local cert issuer enddate group root redirect rest
+  local cert issuer enddate group root redirect rest fetch_rc
   local -a times=() addr_list=()
   VPS_TC_TARGET=''
   VPS_TC_PROBE="$VPS_PROBE_HOST_DEFAULT"
@@ -202,6 +225,9 @@ cmd_target_check() {
 
   tc_check_root_deps
   vps_tmp_init
+  # Until the record is renamed into place, an internal error or a signal
+  # leaves the old one, and the exit says so (detailed design 2.7).
+  VPS_EXIT_NOTE="[x] target-check 中途结束，结果未发布；$VPS_TARGET_DIR/$VPS_TC_TARGET 本次未更新"
   VPS_TC_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   resolved="$(getent ahosts -- "$VPS_TC_TARGET" 2>/dev/null)" || resolved=''
@@ -265,7 +291,9 @@ cmd_target_check() {
       [ -n "$group" ] || group="$(sed -n 's/^\(Server\|Peer\) Temp Key: \([^,]*\).*/\2/p;T;q' <<<"$first")"
       tc_report INFO tls.group "提供 X25519MLKEM768 时协商到 ${group:-未知}（不判定）"
 
-      if root="$(http_fetch h2 "$VPS_TC_TARGET" "$VPS_TMP/root")"; then
+      fetch_rc=0
+      root="$(http_fetch h2 "$VPS_TC_TARGET" "$VPS_TMP/root")" || fetch_rc=$?
+      if [ "$fetch_rc" -eq 0 ]; then
         read -r status _ redirect <<<"$root"
         case "$status" in
           2??) tc_report PASS http.root "/ 返回 $status" ;;
@@ -284,7 +312,7 @@ cmd_target_check() {
           *) tc_report WARN http.root "/ 返回 $status" ;;
         esac
       else
-        tc_report WARN http.root '经 h2 请求 / 失败'
+        tc_report WARN http.root "$(fetch_failed "$fetch_rc" '经 h2 请求 / ')"
       fi
       probe_judge probe.host http1.1
       probe_judge probe.authority h2

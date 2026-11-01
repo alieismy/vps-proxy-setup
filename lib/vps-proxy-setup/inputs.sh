@@ -107,6 +107,10 @@ read_input_file() {
   local -A seen=()
   [ ! -L "$file" ] || input_file_error '不能是符号链接'
   [ -e "$file" ] || input_file_error '不存在'
+  # Checked again on the descriptor below. This check only keeps the open from
+  # waiting for the writer of a FIFO while the deploy lock is held; it does not
+  # close the window for a replacement, which the descriptor checks catch.
+  [ -f "$file" ] || input_file_error '不是普通文件'
   # exec without a command keeps all of its redirections; the group limits
   # 2>/dev/null to the open, or every later message would be lost.
   { exec {fd}<"$file"; } 2>/dev/null || input_file_error '无法打开'

@@ -641,7 +641,8 @@ trust_ca() {
   update-ca-certificates --fresh >/dev/null 2>&1
 }
 
-# standin strict|cross [--large]: (re)start the stand-in with that routing.
+# standin strict|cross [--large] [--http1-only] [--delay SECONDS]: (re)start the
+# stand-in with that routing and those options.
 standin() {
   local i out
   systemctl stop vps-standin.service 2>/dev/null || true
@@ -781,6 +782,9 @@ target_case() {
   observe_end "$name" '/etc/vps-proxy-setup(/target-check(/target\.example)?)?( |$)'
   expect_rc "$name" "$rc"
   expect_clean "$name"
+  if grep -qF '本次未更新' "$phase_dir/$name.err"; then
+    fail "$name: said the record was not updated"
+  fi
   expect_report "$name" INFO resolve tls.group
   expect_text "$name" "$STANDIN"
 }
@@ -886,7 +890,62 @@ phase_vt80() {
     fail 'vt81-large: the probes did not compare equal on the first 4 MiB'
   jq -s -e '[.[] | select(.large == true) | .requests[]] | length > 0 and all(.complete == false)' \
     "$EVIDENCE/standin/connections.jsonl" >/dev/null || fail 'vt81-large: a body was sent to the end'
+
+  # A target without h2: curl --http2 falls back to HTTP/1.1, which the h2
+  # requests must not take as their answer.
+  standin strict --http1-only
+  target_case vt80-http1 1 target.example
+  expect_fails vt80-http1 tls.alpn
+  expect_report vt80-http1 PASS tls.handshake tls.cert probe.host
+  expect_report vt80-http1 WARN http.root probe.authority
+  [ "$(grep -c '没有协商到 HTTP/2' "$phase_dir/vt80-http1.out")" -eq 2 ] ||
+    fail 'vt80-http1: http.root and probe.authority do not both report the missing HTTP/2'
+  record_ok FAIL http1
+
+  # The responses wait 60 seconds, so target-check is still in its HTTP checks
+  # when the signal comes.
+  standin strict --delay 60
+  vt80_term
   standin strict
+}
+
+# vt80-term: TERM before the record is written (detailed design 2.7): exit
+# 143, the previous record stays, nothing is left behind, and stderr says that
+# the record was not updated.
+vt80_term() {
+  local record=/etc/vps-proxy-setup/target-check/target.example before tmp_before pid rc=0 i
+  before="$(sha256sum <"$record")"
+  tmp_before="$(compgen -G '/tmp/vps-proxy-setup.*' || true)"
+  observe_begin vt80-term
+  # Its own process group, so the signal reaches the shell and the curl it
+  # waits for, as a terminal's would. A background job is not a group leader,
+  # so setsid does not fork and $! is the command.
+  setsid "$TOOL" target-check target.example </dev/null >"$phase_dir/vt80-term.out" 2>"$phase_dir/vt80-term.err" &
+  pid=$!
+  for i in $(seq 150); do
+    if grep -qE '^\[INFO\] tls\.group ' "$phase_dir/vt80-term.out"; then
+      break
+    fi
+    [ "$i" -lt 150 ] || fail 'vt80-term: target-check did not reach its HTTP checks'
+    sleep 0.2
+  done
+  # The third field after the command name in /proc/PID/stat is the process group.
+  [ "$(sed 's/.*) //' "/proc/$pid/stat" | cut -d ' ' -f 3)" = "$pid" ] ||
+    fail 'vt80-term: target-check is not in its own process group'
+  kill -TERM -- "-$pid"
+  wait "$pid" || rc=$?
+  printf '%s\n' "$rc" >"$phase_dir/vt80-term.rc"
+  log "vt80-term: exit $rc"
+  sed 's/^/    /' "$phase_dir/vt80-term.out" "$phase_dir/vt80-term.err"
+  observe_end vt80-term
+  expect_rc vt80-term 143
+  expect_clean vt80-term
+  expect_err vt80-term '本次未更新'
+  [ "$(sha256sum <"$record")" = "$before" ] || fail 'vt80-term: the record changed'
+  if compgen -G '/etc/vps-proxy-setup/target-check/.target.example.*' >/dev/null; then
+    fail 'vt80-term: a temporary record was left'
+  fi
+  [ "$(compgen -G '/tmp/vps-proxy-setup.*' || true)" = "$tmp_before" ] || fail 'vt80-term: the scratch directory was left'
 }
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1067,11 @@ phase_vt04() {
   write_input "$f"
   ln -sfn "$f" "$PRIVATE/vt04-link.input"
   vt04_case symlink '不能是符号链接' "$PRIVATE/vt04-link.input"
+  # Refused before the open, which would wait for a writer (on_tty's timeout
+  # is the bound if it did).
+  mkfifo -m 0600 "$PRIVATE/vt04.fifo"
+  vt04_case fifo '不是普通文件' "$PRIVATE/vt04.fifo"
+  rm -f "$PRIVATE/vt04.fifo"
   observe_end vt04
 }
 

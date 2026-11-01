@@ -50,21 +50,32 @@ if ! grep -qx "INSTALLER_VERSION='$version'" install.sh || ! grep -qx "RELEASE_T
 fi
 printf '[+] installer assets and version\n'
 
-if git grep -lI --untracked $'\r' -- .; then
-  fail 'files above contain CR characters; the repository uses LF only'
-fi
+# no_match MESSAGE GIT_GREP_ARGS...: git grep over tracked and untracked files
+# exits 0 on a match and 1 on none; any other status means it did not scan,
+# which must not pass. --no-recurse-submodules: with submodule.recurse=true,
+# git grep refuses --untracked.
+no_match() {
+  local message="$1" rc=0
+  shift
+  git grep --untracked --no-recurse-submodules "$@" || rc=$?
+  case "$rc" in
+    0) fail "$message" ;;
+    1) ;;
+    *) fail "git grep exited with $rc; the scan did not run" ;;
+  esac
+}
+
+no_match 'files above contain CR characters; the repository uses LF only' -lI $'\r' -- .
 printf '[+] LF line endings\n'
 
 # Private keys and common token formats.
-if git grep -nIE --untracked \
+no_match 'lines above look like secrets' -nIE \
   -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
   -e 'gh[pousr]_[A-Za-z0-9]{36}' \
   -e 'github_pat_[A-Za-z0-9_]{22,}' \
   -e 'AKIA[0-9A-Z]{16}' \
   -e 'xox[abprs]-[A-Za-z0-9-]{10,}' \
-  -e 'sk-[A-Za-z0-9_-]{32,}' -- .; then
-  fail 'lines above look like secrets'
-fi
+  -e 'sk-[A-Za-z0-9_-]{32,}' -- .
 printf '[+] no secret patterns\n'
 
 # VT-97: addresses, UUIDs, domains and local paths (detailed design 9.1). The
