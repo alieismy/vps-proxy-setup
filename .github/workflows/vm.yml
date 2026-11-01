@@ -1,0 +1,46 @@
+name: vm
+
+on:
+  pull_request:
+    paths: ['bin/**', 'lib/**', 'tests/**', 'install.sh', '.github/workflows/vm.yml']
+  push:
+    branches: [master]
+    paths: ['bin/**', 'lib/**', 'tests/**', 'install.sh', '.github/workflows/vm.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # M1 on Debian 13 amd64 (detailed design 9.1, 9.3). Both jobs first build
+  # the main configuration: vps-tuning, vps-hardening v0.1.1, this tool from
+  # its release installer.
+  #   m1-preflight: VT-80, VT-81, VT-01 to VT-05.
+  #   m1-check: S1 baseline, VT-71 (M1 part), VT-72 to VT-76.
+  vm:
+    name: ${{ matrix.suite }}
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [m1-preflight, m1-check]
+    runs-on: ubuntu-24.04
+    # m1-check boots about twenty guests: the main configuration, S1 and one
+    # overlay per injection.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
+          if test -e /dev/kvm; then sudo chmod a+rw /dev/kvm; fi
+      - name: Run the ${{ matrix.suite }} suite
+        run: python3 tests/vm.py --suite '${{ matrix.suite }}'
+      # Only after the leak scan: vm.py writes MANIFEST.json after it, so a run
+      # that was killed or timed out before the scan uploads nothing.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('.tmp/vm/evidence/MANIFEST.json') != ''
+        with:
+          name: vm-${{ matrix.suite }}
+          path: .tmp/vm/evidence/
+          retention-days: 14
