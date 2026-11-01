@@ -1228,14 +1228,19 @@ phase_s3() {
 # ---------------------------------------------------------------------------
 # VT-71 to VT-76: check on an S1 host (detailed design 9.3, 9.5)
 
-# Leak markers (verification plan 3.4, VT-74): the install result and secret
+# Leak markers (verification plan 3.4, VT-74): the install result (or the copy
+# the M2 tests keep of it, since deploy deletes it), the handoff and secret
 # values of the database, at least 8 characters so that they cannot match by
 # chance. They stay in PRIVATE; tests/vm.py reads them for its own scan.
 collect_markers() {
+  local f
   {
     [ ! -s "$PRIVATE/token-markers" ] || cat "$PRIVATE/token-markers"
-    [ ! -r "$XUI_RESULT" ] ||
-      sed -n 's/^XUI_\(USERNAME\|PASSWORD\|WEB_BASE_PATH\|ACCESS_URL\|API_TOKEN\)=//p' "$XUI_RESULT"
+    for f in "$XUI_RESULT" "$PRIVATE/install-result.env"; do
+      [ ! -r "$f" ] || sed -n 's/^XUI_\(USERNAME\|PASSWORD\|WEB_BASE_PATH\|ACCESS_URL\|API_TOKEN\)=//p' "$f"
+    done
+    [ ! -r /etc/vps-proxy-setup/handoff ] || jq -r '.panel.username, .panel.password, .panel.webBasePath,
+      (.users[] | .subscriptionUrl, .mihomoUrl)' /etc/vps-proxy-setup/handoff
     [ ! -e "$XUI_DB" ] || db_secret_values
   } | sed 's#^/##; s#/$##' | awk 'length($0) >= 8' | sort -u >"$PRIVATE/markers"
   printf '%s markers\n' "$(wc -l <"$PRIVATE/markers")" >"$phase_dir/markers.txt"

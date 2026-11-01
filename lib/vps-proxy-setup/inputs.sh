@@ -14,6 +14,9 @@ readonly VPS_MAX_USERS=8
 
 declare -A VPS_IN=()
 VPS_IN_FILE=''
+# Device and inode of the input file as read; deploy deletes the file only while
+# the path still names it (detailed design 15.2).
+VPS_IN_FILE_ID=''
 VPS_IN_MIGRATE=0
 # Reason set by the *_reason validators when they return 1.
 VPS_REASON=''
@@ -116,8 +119,10 @@ read_input_file() {
   # exec without a command keeps all of its redirections; the group limits
   # 2>/dev/null to the open, or every later message would be lost.
   { exec {fd}<"$file"; } 2>/dev/null || input_file_error '无法打开'
-  # /proc/$$/fd names the descriptor of this shell; -L follows it to the open file.
-  attrs="$(stat -L -c '%d:%i|%F|%u|%a|%s' "/proc/$$/fd/$fd" 2>/dev/null)" ||
+  # stat inherits the descriptor and reads it as /proc/self/fd; -L follows it to
+  # the open file. /proc/$$ would name the parent shell inside a subshell, as
+  # when the tests call this function (detailed design 19).
+  attrs="$(stat -L -c '%d:%i|%F|%u|%a|%s' "/proc/self/fd/$fd" 2>/dev/null)" ||
     input_file_error '无法读取属性'
   link_attrs="$(stat -c '%d:%i|%F' -- "$file" 2>/dev/null)" || link_attrs=''
   IFS='|' read -r -a st <<<"$attrs"
@@ -126,6 +131,7 @@ read_input_file() {
   [ "${st[2]}" = 0 ] || input_file_error '必须属于 root'
   [ "${st[3]}" = 600 ] || input_file_error "权限必须是 0600，现在是 0${st[3]}"
   size="${st[4]}"
+  VPS_IN_FILE_ID="${st[0]}"
   [ "$size" -le "$VPS_INPUT_MAX_BYTES" ] || input_file_error '超过 64 KiB'
   # Bash drops NUL bytes from command substitution with a warning; the length
   # check below finds them, so the warning is not shown.

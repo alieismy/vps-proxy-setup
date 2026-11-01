@@ -630,8 +630,8 @@ def m2_deploy(ctx, main):
         guest.phase('vt11', script='m2.sh')
         guest.poweroff()
     # The input file, the test token and a fresh target-check result are on this disk.
-    names = ('vt10', 'vt12', 'vt13-fail', 'vt15-inbound', 'vt15-client', 'vt15-settings', 'vt18-refused',
-             'vt18-lost', 'vt18-short-id')
+    names = ('vt10', 'vt12', 'vt13-fail', 'vt15-inbound', 'vt15-client', 'vt15-settings', 'vt17-lost',
+             'vt17-unsent', 'vt18-refused', 'vt18-lost', 'vt18-short-id')
     for name in names:
         with Guest(ctx, name, ctx.overlay(disk, f'{name}.qcow2')) as guest:
             guest.phase(name, script='m2.sh')

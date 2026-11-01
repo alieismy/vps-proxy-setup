@@ -59,8 +59,8 @@ usage() {
 
 命令：
   deploy [--input <文件>] [--migrate]
-              首次部署（交互执行）。M2 开发中：确认后安装、核对 3X-UI 并写入
-              业务配置（第 1～6 步），之后的步骤尚未实现
+              首次部署（交互执行）。M2 开发中：确认后安装、核对 3X-UI，写入业务
+              配置并收尾（第 1～7 步），Tunnel 等之后的步骤尚未实现
   check       只读检查：逐项核对 3X-UI、订阅、监听、cloudflared 和加固状态
   target-check <主机名> [--probe-host <主机名>]
               在本机核实候选的 REALITY target，结果写入

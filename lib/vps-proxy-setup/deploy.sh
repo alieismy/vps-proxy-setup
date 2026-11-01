@@ -2,8 +2,8 @@
 # deploy (detailed design 2.5, 16.1). After the preflight and the
 # administrator's confirmation: fetch and verify the 3X-UI files (step 2), run
 # the verified installer (step 3), verify what it installed (step 4), check
-# that nothing is configured yet (step 5) and write the configuration through
-# the panel API (step 6). The steps after 6 come later in M2 and in M3.
+# that nothing is configured yet (step 5), write the configuration through
+# the panel API (step 6) and finish 3X-UI (step 7). The steps after 7 come in M3.
 # Globals defined here are read by the tests through the module, which
 # ShellCheck checks separately.
 # shellcheck disable=SC2034
@@ -52,6 +52,7 @@ deploy_confirm() {
     printf '  - 以非交互方式运行安装器：面板端口 %s，不启用 IP Limit，SQLite，不配置 SSL；它会安装软件包并启动 x-ui\n' "$VPS_PANEL_PORT"
     printf '  - 核对所装的文件，把面板改为只监听 127.0.0.1 并重启\n'
     printf '  - 写入订阅设置、REALITY 入站（target %s）、转发入站、路由和使用者\n' "${VPS_IN[target]}"
+    printf '  - 重启面板，写交接文件 %s 和部署记录，撤销安装 token，删除安装结果和输入文件\n' "$VPS_HANDOFF_FILE"
     printf '不会开放端口，也不会改动 UFW。第 3 步起失败时不自动回滚，要按清理步骤处理。\n'
     printf '输入 yes 继续，其他输入取消：'
   } >&2
@@ -311,9 +312,14 @@ VPS_XUI_PASS=''
 VPS_XUI_BASE=''
 VPS_XUI_TOKEN=''
 VPS_TOKEN_ID=''
-# The last API call.
+# Device and inode of the install result as read; step 7 deletes it only while
+# the path still names it (15.2).
+VPS_XUI_RESULT_ID=''
+# The last API call. VPS_API_LIMIT, when set, bounds a request below the usual
+# VPS_API_TIMEOUT (the wait after the panel restart, 16.1).
 VPS_API_HTTP=''
 VPS_API_OUT=''
+VPS_API_LIMIT=''
 # What step 6 created, for the step reports and the tests.
 VPS_FWD_ID=''
 VPS_FWD_TAG=''
@@ -336,8 +342,9 @@ install_result_read() {
     VPS_REASON='无法打开安装结果'
     return 1
   fi
-  attrs="$(stat -L -c '%F|%u|%a' "/proc/$$/fd/$fd" 2>/dev/null)" || attrs=''
-  if [ "$attrs" != 'regular file|0|600' ]; then
+  # As in read_input_file: stat reads its inherited descriptor.
+  attrs="$(stat -L -c '%d:%i|%F|%u|%a' "/proc/self/fd/$fd" 2>/dev/null)" || attrs=''
+  if [ "${attrs#*|}" != 'regular file|0|600' ]; then
     exec {fd}<&-
     VPS_REASON='安装结果不是属于 root、权限 0600 的普通文件'
     return 1
@@ -383,6 +390,7 @@ install_result_read() {
   VPS_XUI_PASS="${got[XUI_PASSWORD]}"
   VPS_XUI_BASE="${got[XUI_WEB_BASE_PATH]}"
   VPS_XUI_TOKEN="${got[XUI_API_TOKEN]}"
+  VPS_XUI_RESULT_ID="${attrs%%|*}"
 }
 
 # api_call METHOD PATH [BODY_FILE [CONTENT_TYPE]]: one request to the panel on
@@ -402,7 +410,8 @@ api_call() {
   if ! code="$({
     printf 'url = "http://127.0.0.1:%s/%s/panel/api/%s"\n' "$VPS_PANEL_PORT" "$VPS_XUI_BASE" "$path"
     printf 'header = "Authorization: Bearer %s"\n' "$VPS_XUI_TOKEN"
-  } | curl -q --silent --noproxy '*' --proto '=http' --connect-timeout 5 --max-time 30 -X "$method" \
+  } | curl -q --silent --noproxy '*' --proto '=http' --connect-timeout 5 \
+    --max-time "${VPS_API_LIMIT:-$VPS_API_TIMEOUT}" -X "$method" \
     "${data[@]}" -o "$VPS_API_OUT" -w '%{http_code}' -K - 2>/dev/null)"; then
     return 1
   fi
@@ -576,7 +585,8 @@ deploy_write() {
   fi
   jq '.obj | fromjson' -- "$VPS_API_OUT" >"$VPS_TMP/template-read.json"
   # The default template of the fixed version (14): one direct freedom, one
-  # blocked blackhole, AsIs; with FR-13 also no dns (4.2 routing.ai-ipv6).
+  # blocked blackhole, AsIs, the api rule first; with FR-13 also no dns (4.2
+  # routing.ai-ipv6).
   if ! jq -e --arg ipv6 "$ipv6" '.xraySetting
       | ([.outbounds[]? | select(.tag == "direct" and .protocol == "freedom")] | length == 1)
       and ([.outbounds[]? | select(.tag == "blocked" and .protocol == "blackhole")] | length == 1)
@@ -584,6 +594,8 @@ deploy_write() {
       and ([.outbounds[]? | select(.tag == "'"$VPS_AI_TAG"'")] | length == 0)
       and ((.routing.domainStrategy // "AsIs") == "AsIs")
       and ((.routing.rules // []) | type == "array")
+      and (.routing.rules[0] | type == "object" and .outboundTag == "api"
+        and (.inboundTag | if type == "array" then any(.[]; . == "api") else . == "api" end))
       and ($ipv6 == "off" or (has("dns") | not))' -- "$VPS_TMP/template-read.json" >/dev/null; then
     report FAIL write.template 'Xray 模板不是固定版本的默认模板'
     write_stop 'Xray 模板不是预期的默认模板'
@@ -670,21 +682,25 @@ deploy_write() {
 }
 
 # The routing of solution design 7.4 with the real tags, in front of the
-# template's own rules; with FR-13 the outbound and rule of 4.4. Before that
-# write, the panel's own Xray must load the FR-13 rule (16.1 step 6, 14).
+# template's own rules except the api rule; with FR-13 the outbound and rule
+# of 4.4. Every template save puts the rule api -> api first
+# (EnsureStatsRouting in internal/web/service/xray_setting.go at the fixed
+# commit), so the rules go right after it, where the save keeps them as sent;
+# that rule matches only the panel's own api inbound. Before the write, the
+# panel's own Xray must load the FR-13 rule (16.1 step 6, 14).
 deploy_write_template() {
-  local target="${VPS_IN[target]}" ipv6="${VPS_IN[ipv6_ai_egress]}" rc=0
+  local target="${VPS_IN[target]}" ipv6="${VPS_IN[ipv6_ai_egress]}" rc=0 diff
   jq --arg fwd "$VPS_FWD_TAG" --arg real "$VPS_REALITY_TAG" --arg target "$target" --arg ipv6 "$ipv6" \
     --arg ai "$VPS_AI_TAG" '.xraySetting
     | (.outbounds[] | select(.tag == "direct") | .settings.finalRules) as $final
-    | .routing.rules = ([
+    | .routing.rules = (.routing.rules[:1] + [
         {type: "field", inboundTag: [$fwd], domain: ["full:" + $target], outboundTag: "direct"},
         {type: "field", inboundTag: [$fwd], outboundTag: "blocked"},
         {type: "field", inboundTag: [$real], domain: ["geosite:cn"], outboundTag: "blocked"},
         {type: "field", inboundTag: [$real], ip: ["geoip:cn"], outboundTag: "blocked"}]
       + (if $ipv6 == "on" then [{type: "field", inboundTag: [$real],
           domain: ["geosite:openai", "geosite:anthropic"], outboundTag: $ai}] else [] end)
-      + (.routing.rules // []))
+      + .routing.rules[1:])
     | if $ipv6 == "on" then .outbounds += [{tag: $ai, protocol: "freedom", settings: {finalRules: $final},
         streamSettings: {sockopt: {domainStrategy: "ForceIPv6v4"}}}] else . end' \
     -- "$VPS_TMP/template-read.json" >"$VPS_TMP/template-write.json"
@@ -711,14 +727,19 @@ deploy_write_template() {
     ! jq -e --slurpfile want "$VPS_TMP/template-write.json" --slurpfile r "$VPS_TMP/template-read.json" \
       '.obj | fromjson | .xraySetting == $want[0] and .outboundTestUrl == $r[0].outboundTestUrl' \
       -- "$VPS_API_OUT" >/dev/null 2>&1; then
-    report FAIL write.template "Xray 模板读回与写入不一致（HTTP $VPS_API_HTTP）"
+    # The template holds no secret; the first differing paths say what changed.
+    diff="$(jq -r --slurpfile want "$VPS_TMP/template-write.json" '(.obj | fromjson? | .xraySetting) as $got
+      | [($want[0], $got) | paths(scalars)] | unique
+      | map(select(. as $p | ($got | getpath($p)) != ($want[0] | getpath($p))) | map(tostring) | join("."))
+      | .[:5] | join(" ")' -- "$VPS_API_OUT" 2>/dev/null)" || diff=''
+    report FAIL write.template "Xray 模板读回与写入不一致（HTTP $VPS_API_HTTP${diff:+；不同之处：$diff}）"
     VPS_DONE+=('Xray 模板（读回不一致）')
     write_stop 'Xray 模板读回与写入不一致'
   fi
   if [ "$ipv6" = on ]; then
-    report PASS write.template "路由已写入并读回一致：方案设计第 7.4 节的四条规则和 FR-13 的第五条"
+    report PASS write.template "路由已写入并读回一致：api 规则之后是方案设计第 7.4 节的四条规则和 FR-13 的规则"
   else
-    report PASS write.template '路由已写入并读回一致：方案设计第 7.4 节的四条规则'
+    report PASS write.template '路由已写入并读回一致：api 规则之后是方案设计第 7.4 节的四条规则'
   fi
   VPS_DONE+=('Xray 模板')
 }
@@ -757,6 +778,273 @@ deploy_write_clients() {
     write_stop '使用者的 UUID 或订阅 ID 有重复'
   fi
   report PASS write.clients "$n 个使用者已创建并读回一致：${VPS_IN[users]}"
+}
+
+# --- Step 7: finish 3X-UI (detailed design 16.1, 15.2) -----------------------
+
+# What is in place when step 7 stops, for the message (16.1).
+VPS_FINISH_STATE='业务配置已写入；安装 token 未撤销，安装结果和输入文件保留'
+
+finish_stop() {
+  deploy_stop 7 "$1。$VPS_FINISH_STATE。$VPS_CLEANUP_HINT"
+}
+
+# The panel restart. Upstream answers first and about 3 seconds later restarts
+# the web and subscription servers in its own process on SIGHUP (main.go at
+# the fixed commit), not Xray. Done when x-ui is active, the panel and the
+# subscription server listen on loopback only and the API answers, within
+# VPS_PANEL_WAIT; each request is bounded by the time left (16.1).
+deploy_restart_panel() {
+  local rc=0 deadline left active panel sub api
+  api_write POST setting/restartPanel '' '' 'true' || rc=$?
+  if [ "$rc" -eq 1 ]; then
+    report FAIL finish.restart "面板拒绝重启（HTTP $VPS_API_HTTP）"
+    finish_stop '面板没有重启'
+  fi
+  # A lost response is judged by what follows: the old subscription server
+  # listens on all addresses, so only a restart passes the wait.
+  deadline=$((SECONDS + VPS_PANEL_WAIT))
+  sleep 4
+  while :; do
+    active="$(bounded systemctl is-active x-ui.service 2>/dev/null)" || true
+    tcp_listeners_load
+    panel="$(port_state "$VPS_PANEL_PORT")" || panel=none
+    sub="$(port_state "$VPS_PORT_SUB")" || sub=none
+    api=no
+    left=$((deadline - SECONDS))
+    if [ "$active" = active ] && [ "$panel" = loopback ] && [ "$sub" = loopback ] && [ "$left" -gt 0 ]; then
+      [ "$left" -lt "$VPS_API_TIMEOUT" ] || left="$VPS_API_TIMEOUT"
+      VPS_API_LIMIT="$left"
+      if api_call GET setting/apiTokens && api_ok 'type == "array"'; then
+        api=yes
+      fi
+      VPS_API_LIMIT=''
+    fi
+    [ "$api" = no ] || break
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      report FAIL finish.restart "重启后 $VPS_PANEL_WAIT 秒内没有恢复：x-ui ${active:-状态未知}，面板 $panel，订阅服务 $sub，接口 HTTP $VPS_API_HTTP"
+      finish_stop '面板重启后没有恢复'
+    fi
+    sleep 2
+  done
+  report PASS finish.restart "面板已重启：x-ui 运行中，面板和订阅服务（$VPS_PORT_SUB）只监听回环地址，接口可用"
+}
+
+VPS_SUB_HTTP=''
+# sub_fetch PATH OUT: GET on the local subscription server. Once subDomain is
+# set, upstream answers only a Host equal to it (403 otherwise,
+# DomainValidatorMiddleware). PATH holds the subscription path and ID, so it
+# reaches curl on stdin like the API URL.
+sub_fetch() {
+  local code
+  VPS_SUB_HTTP=000
+  code="$({
+    printf 'url = "http://127.0.0.1:%s%s"\n' "$VPS_PORT_SUB" "$1"
+    printf 'header = "Host: %s"\n' "${VPS_IN[sub_host]}"
+  } | curl -q --silent --noproxy '*' --proto '=http' --connect-timeout 5 --max-time "$VPS_API_TIMEOUT" \
+    -A vps-proxy-setup -o "$2" -w '%{http_code}' -K - 2>/dev/null)" || return 1
+  VPS_SUB_HTTP="$code"
+}
+
+# sub_path FIELD INDEX: the path of a user's subscription, from the paths
+# written in step 6 and the user's subscription ID. Paths are joined with
+# single slashes (14).
+sub_path() {
+  jq -rs --arg k "$1" --argjson i "$2" --slurpfile s "$VPS_TMP/settings-write.json" \
+    '"/" + ($s[0][$k] | ltrimstr("/") | rtrimstr("/")) + "/" + .[$i].subId' -- "$VPS_TMP/clients.jsonl"
+}
+
+# Each user's two subscriptions from the local server, before the token is
+# revoked (16.1 step 7). The plain one is base64 (upstream's default
+# subEncrypt) and holds one VLESS link: the user's UUID at the node IPv4 on
+# 443, REALITY, Vision, the target as SNI and the public key. The Mihomo one
+# names the user's UUID and the node IPv4. Everything stays in the private
+# directory; only the user's code name is shown.
+deploy_check_subs() {
+  local n i email what
+  n="$(jq -s length -- "$VPS_TMP/clients.jsonl")"
+  for ((i = 0; i < n; i++)); do
+    email="$(jq -rs --argjson i "$i" '.[$i].email' -- "$VPS_TMP/clients.jsonl")"
+    what="使用者 $email 的通用订阅"
+    if ! sub_fetch "$(sub_path subPath "$i")" "$VPS_TMP/sub-body" || [ "$VPS_SUB_HTTP" != 200 ] ||
+      ! jq -Rse --argjson i "$i" --arg node "${VPS_IN[node_ip]}" --arg target "${VPS_IN[target]}" \
+        --slurpfile c "$VPS_TMP/clients.jsonl" --slurpfile k "$VPS_TMP/x25519.json" '
+        (try (gsub("\\s"; "") | @base64d) catch "") as $t
+        | [$t | splits("\n") | select(startswith("vless://"))] as $l
+        | ($l | length) == 1
+        and ($l[0] | capture("^vless://(?<id>[^@]+)@(?<host>[^:/?#]+):(?<port>[0-9]+)\\?(?<q>[^#]*)") as $m
+          | ($m.q | split("&") | map(split("=") | {(.[0]): (.[1:] | join("="))}) | add) as $p
+          | $m.id == $c[$i].uuid and $m.host == $node and $m.port == "443" and $p.security == "reality"
+            and $p.flow == "xtls-rprx-vision" and $p.sni == $target and $p.pbk == $k[0].obj.publicKey)' \
+        -- "$VPS_TMP/sub-body" >/dev/null 2>&1; then
+      report FAIL finish.sub "${what}不符合（HTTP $VPS_SUB_HTTP）"
+      finish_stop '本机订阅不可用'
+    fi
+    what="使用者 $email 的 Mihomo 订阅"
+    if ! sub_fetch "$(sub_path subClashPath "$i")" "$VPS_TMP/sub-body" || [ "$VPS_SUB_HTTP" != 200 ] ||
+      ! jq -Rse --argjson i "$i" --arg node "${VPS_IN[node_ip]}" --slurpfile c "$VPS_TMP/clients.jsonl" \
+        'contains("proxies:") and contains($c[$i].uuid) and contains($node)' \
+        -- "$VPS_TMP/sub-body" >/dev/null 2>&1; then
+      report FAIL finish.sub "${what}不符合（HTTP $VPS_SUB_HTTP）"
+      finish_stop '本机订阅不可用'
+    fi
+  done
+  rm -f -- "$VPS_TMP/sub-body"
+  report PASS finish.sub "本机订阅可用：$n 个使用者的通用订阅和 Mihomo 订阅都返回本人的节点"
+}
+
+# handoff_ok FILE: the handoff of 15.2 parses back with the expected shape.
+handoff_ok() {
+  [ "$(file_attrs "$1")" = 'regular file|0|600' ] &&
+    jq -e --arg host "${VPS_IN[sub_host]}" --argjson port "$VPS_PANEL_PORT" --arg users "${VPS_IN[users]}" '
+      .format == 1
+      and (.panel | (.username | type) == "string" and (.password | type) == "string"
+        and (.webBasePath | type == "string" and test("^/[A-Za-z0-9]+/$")) and .port == $port)
+      and (.users | map(.email) | join(",")) == $users
+      and all(.users[]; (.subscriptionUrl | startswith("https://" + $host + "/"))
+        and (.mihomoUrl | startswith("https://" + $host + "/")) and .subscriptionUrl != .mihomoUrl)' \
+      -- "$1" >/dev/null 2>&1
+}
+
+# The handoff of 15.2: written beside its final name, parsed back and checked,
+# then renamed. The panel credentials reach jq on stdin. webBasePath is given
+# with its slashes, as the panel shows it; each address is
+# https://<sub_host>/<path>/<subId> with the paths kept.
+deploy_handoff() {
+  local tmp n
+  n="$(jq -s length -- "$VPS_TMP/clients.jsonl")"
+  if ! { [ -d "$VPS_ETC_DIR" ] || mkdir -m 0700 -- "$VPS_ETC_DIR"; } 2>/dev/null ||
+    [ "$(file_attrs "$VPS_ETC_DIR")" != 'directory|0|700' ]; then
+    report FAIL finish.handoff "$VPS_ETC_DIR 不是属于 root、权限 0700 的目录"
+    finish_stop '交接文件没有写入'
+  fi
+  if ! tmp="$(mktemp -- "$VPS_ETC_DIR/.handoff.XXXXXXXX" 2>/dev/null)"; then
+    report FAIL finish.handoff "无法在 $VPS_ETC_DIR 中创建文件"
+    finish_stop '交接文件没有写入'
+  fi
+  VPS_CLEANUP+=("$tmp")
+  if ! printf '%s\n%s\n%s\n' "$VPS_XUI_USER" "$VPS_XUI_PASS" "$VPS_XUI_BASE" |
+    jq -nR --arg host "${VPS_IN[sub_host]}" --argjson port "$VPS_PANEL_PORT" \
+      --slurpfile s "$VPS_TMP/settings-write.json" --slurpfile c "$VPS_TMP/clients.jsonl" '
+      def url($path; $id): "https://" + $host + "/" + ($path | ltrimstr("/") | rtrimstr("/")) + "/" + $id;
+      [inputs] as [$user, $pass, $base]
+      | {format: 1, panel: {username: $user, password: $pass, webBasePath: ("/" + $base + "/"), port: $port},
+         users: [$c[] | {email, subscriptionUrl: url($s[0].subPath; .subId),
+           mihomoUrl: url($s[0].subClashPath; .subId)}]}' >"$tmp" 2>/dev/null ||
+    ! handoff_ok "$tmp" || ! mv -f -- "$tmp" "$VPS_HANDOFF_FILE" 2>/dev/null || ! handoff_ok "$VPS_HANDOFF_FILE"; then
+    report FAIL finish.handoff '交接文件写入或核对失败'
+    finish_stop '交接文件没有写入'
+  fi
+  report PASS finish.handoff "交接文件已写入 $VPS_HANDOFF_FILE（root、0600）：面板凭据和 $n 个使用者的订阅地址"
+  VPS_FINISH_STATE="业务配置已写入，交接文件在 $VPS_HANDOFF_FILE；安装 token 未撤销，安装结果和输入文件保留"
+}
+
+# token_row_absent: the read-only database (4.1) has no api_tokens row with
+# the ID of the install token. Returns 1 when it has, 2 when the database
+# cannot be read.
+token_row_absent() {
+  local state out
+  state="$(xui_db_state)" || return 2
+  xui_db_uri "$state" >/dev/null || return 2
+  out="$(xui_sqlite "$VPS_XUI_URI" "SELECT count(*) FROM api_tokens WHERE id = $VPS_TOKEN_ID;" 2>/dev/null)" ||
+    return 2
+  [ "$out" = 0 ]
+}
+
+# Revoke the install token (15.1, 15.3). Revoked only when the old token gets
+# 401 on a path that answered before and the database has no row for it,
+# whatever the delete answered; no second admin token is made to find out.
+deploy_revoke_token() {
+  local rc=0 absent=0 row
+  printf '{"expectedScope":"admin"}\n' >"$VPS_TMP/token-delete.json"
+  api_write POST "setting/apiTokens/delete/$VPS_TOKEN_ID" "$VPS_TMP/token-delete.json" application/json 'true' ||
+    rc=$?
+  if [ "$rc" -eq 1 ]; then
+    report FAIL finish.token "撤销安装 token 被拒绝（HTTP $VPS_API_HTTP）"
+    finish_stop '安装 token 没有撤销'
+  fi
+  api_call GET setting/apiTokens || api_call GET setting/apiTokens || true
+  token_row_absent || absent=$?
+  if [ "$VPS_API_HTTP" = 401 ] && [ "$absent" -eq 0 ]; then
+    report PASS finish.token '安装 token 已撤销：原 token 被拒绝（HTTP 401），数据库中没有它的记录'
+    VPS_XUI_TOKEN=''
+    VPS_FINISH_STATE="业务配置已写入，交接文件在 $VPS_HANDOFF_FILE，安装 token 已撤销；部署记录未写入，安装结果和输入文件保留"
+    return 0
+  fi
+  case "$absent" in
+    0) row='没有它的记录' ;;
+    1) row='仍有它的记录' ;;
+    *) row='无法读取' ;;
+  esac
+  report FAIL finish.token "无法证实安装 token 已撤销：原 token 得到 HTTP $VPS_API_HTTP，数据库$row"
+  VPS_FINISH_STATE="业务配置已写入，交接文件在 $VPS_HANDOFF_FILE；安装 token 可能仍然有效，要在面板的 API token 设置中核对并删除；安装结果和输入文件保留"
+  finish_stop '安装 token 的撤销结果未知'
+}
+
+# deploy.conf of 2.8, written and renamed like the handoff, then parsed back
+# with the reader of check. target_check_time is the time of the record that
+# step 5 accepted.
+deploy_record() {
+  local tmp
+  if ! tmp="$(mktemp -- "$VPS_ETC_DIR/.deploy.conf.XXXXXXXX" 2>/dev/null)"; then
+    report FAIL finish.record "无法在 $VPS_ETC_DIR 中创建文件"
+    finish_stop '部署记录没有写入'
+  fi
+  VPS_CLEANUP+=("$tmp")
+  if ! printf 'tool_version=%s\nxui_version=%s\ncloudflared_version=%s\nmode=deploy\ndeployed_at=%s\nsub_host=%s\nnode_ip=%s\ntarget=%s\ntarget_check_time=%s\nipv6_ai_egress=%s\n' \
+    "$VPS_VERSION" "$VPS_PIN_XUI_VERSION" "$VPS_PIN_CLOUDFLARED_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "${VPS_IN[sub_host]}" "${VPS_IN[node_ip]}" "${VPS_IN[target]}" "$VPS_TR_TIME" "${VPS_IN[ipv6_ai_egress]}" \
+    >"$tmp" 2>/dev/null || [ "$(file_attrs "$tmp")" != 'regular file|0|600' ] ||
+    ! mv -f -- "$tmp" "$VPS_DEPLOY_CONF" 2>/dev/null || ! read_deploy_record ||
+    ! jq -e --arg sub "${VPS_IN[sub_host]}" --arg node "${VPS_IN[node_ip]}" --arg target "${VPS_IN[target]}" \
+      --arg ipv6 "${VPS_IN[ipv6_ai_egress]}" --arg time "$VPS_TR_TIME" '.mode == "deploy" and .sub_host == $sub
+        and .node_ip == $node and .target == $target and .ipv6_ai_egress == $ipv6 and .target_check_time == $time' \
+      <<<"$VPS_RECORD_JSON" >/dev/null 2>&1; then
+    report FAIL finish.record '部署记录写入或核对失败'
+    finish_stop '部署记录没有写入'
+  fi
+  report PASS finish.record "部署记录已写入 $VPS_DEPLOY_CONF"
+}
+
+# remove_if_same PATH ID: delete PATH only while it is the file that was read
+# (15.2); 1 when it is gone, replaced or not deleted.
+remove_if_same() {
+  local now
+  now="$(stat -c '%d:%i|%F' -- "$1" 2>/dev/null)" || return 1
+  [ "$now" = "$2|regular file" ] || return 1
+  rm -f -- "$1" 2>/dev/null && [ ! -e "$1" ]
+}
+
+# The install result and the input file go last (15.2); a replaced file is
+# left alone and reported.
+deploy_remove_inputs() {
+  local left=() done='安装结果已删除'
+  remove_if_same "$VPS_XUI_DB_DIR/install-result.env" "$VPS_XUI_RESULT_ID" ||
+    left+=("$VPS_XUI_DB_DIR/install-result.env")
+  if [ -n "$VPS_IN_FILE" ]; then
+    done='安装结果和输入文件已删除'
+    remove_if_same "$VPS_IN_FILE" "$VPS_IN_FILE_ID" || left+=("输入文件 $VPS_IN_FILE")
+  fi
+  VPS_XUI_USER=''
+  VPS_XUI_PASS=''
+  VPS_XUI_BASE=''
+  if [ "${#left[@]}" -gt 0 ]; then
+    report FAIL finish.cleanup "没有删除：$(join_by '、' "${left[@]}")（不存在、已被替换或删除失败）"
+    deploy_stop 7 "业务配置、交接文件和部署记录已写入，安装 token 已撤销；$(join_by '、' "${left[@]}") 没有删除，要人工核对后删除"
+  fi
+  report PASS finish.cleanup "$done"
+}
+
+# Step 7 (16.1): the subscriptions are read before the token is revoked, and
+# the install result, the only other source of the credentials, goes only
+# after the handoff is in place.
+deploy_finish() {
+  deploy_restart_panel
+  deploy_check_subs
+  deploy_handoff
+  deploy_revoke_token
+  deploy_record
+  deploy_remove_inputs
 }
 
 cmd_deploy() {
@@ -799,6 +1087,9 @@ cmd_deploy() {
   deploy_step 6 '写入业务配置'
   deploy_write
 
-  printf '\n[x] 第 1～6 步完成：业务配置已写入并读回一致。第 7 步起尚未实现（M2 开发中）：面板未重启，订阅仍按旧设置监听，安装 token 未撤销；输入文件和安装结果保留\n' >&2
+  deploy_step 7 '收尾 3X-UI'
+  deploy_finish
+
+  printf '\n[x] 第 1～7 步完成：3X-UI 已收尾，交接文件在 %s，取走后请删除。第 8 步（Tunnel）起尚未实现（M2 开发中）：订阅还不能从外部访问；Tunnel token 没有保存，随本进程退出丢弃\n' "$VPS_HANDOFF_FILE" >&2
   exit "$VPS_EXIT_FAIL"
 }

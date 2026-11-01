@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck source-path=SCRIPTDIR
 # Guest side of the M2 VM tests (detailed design 9, 19; verification plan
-# VT-10 to VT-13, VT-15, VT-16, VT-18). Sources tests/guest/m1.sh for its helpers and the phases of
+# VT-10 to VT-13, VT-15 to VT-18). Sources tests/guest/m1.sh for its helpers and the phases of
 # the main configuration; tests/vm.py runs one phase per SSH session. The
 # guest is the main configuration with the namespaces, the stand-in and a
 # fresh target-check result of the m1 phase network and the phase m2-prep.
@@ -22,7 +22,13 @@ readonly PREWRITE_ITEMS=(fresh.version fresh.inbounds fresh.clients fresh.settin
   api.token)
 readonly WRITE_ITEMS=(keys.x25519 keys.short-id write.settings write.forwarder write.reality write.template
   write.clients)
+readonly FINISH_ITEMS=(finish.restart finish.sub finish.handoff finish.token finish.record finish.cleanup)
 readonly XRAY_CONFIG=/usr/local/x-ui/bin/config.json
+readonly HANDOFF=/etc/vps-proxy-setup/handoff
+readonly DEPLOY_CONF=/etc/vps-proxy-setup/deploy.conf
+readonly TARGET_RECORD=/etc/vps-proxy-setup/target-check/target.example
+# The copy of the install result that keeper_start keeps (collect_markers reads it).
+readonly RESULT_COPY="$PRIVATE/install-result.env"
 
 # A failure of a driver itself, told apart from the refusal under test (exit 1).
 driver_fail() {
@@ -34,6 +40,129 @@ driver_fail() {
 # confirmation of detailed design 2.5.
 deploy_yes() {
   TTY_INPUT=yes capture_tty "$@"
+}
+
+# Step 7 deletes the install result. A copy kept while it exists gives the
+# leak markers and the token that VT-17 must see refused.
+KEEPER_PID=''
+keeper_start() {
+  rm -f "$RESULT_COPY" "$RESULT_COPY.tmp"
+  (
+    while :; do
+      if [ -s "$XUI_RESULT" ] && cp "$XUI_RESULT" "$RESULT_COPY.tmp" 2>/dev/null; then
+        mv -f "$RESULT_COPY.tmp" "$RESULT_COPY"
+      fi
+      sleep 1
+    done
+  ) &
+  KEEPER_PID=$!
+}
+
+keeper_stop() {
+  kill "$KEEPER_PID" 2>/dev/null || true
+  wait "$KEEPER_PID" 2>/dev/null || true
+  rm -f "$RESULT_COPY.tmp"
+  [ -s "$RESULT_COPY" ] || fail 'no copy of the install result was kept'
+}
+
+# token_http: the HTTP status the install token gets now, on the path that
+# step 5 read with it.
+token_http() {
+  local port base token
+  port="$(sed -n 's/^XUI_PANEL_PORT=//p' "$RESULT_COPY")"
+  base="$(sed -n 's/^XUI_WEB_BASE_PATH=//p' "$RESULT_COPY")"
+  token="$(sed -n 's/^XUI_API_TOKEN=//p' "$RESULT_COPY")"
+  {
+    printf 'url = "http://127.0.0.1:%s/%s/panel/api/setting/apiTokens"\n' "$port" "${base#/}"
+    printf 'header = "Authorization: Bearer %s"\n' "$token"
+  } | curl -q -s --noproxy '*' --max-time 30 -o /dev/null -w '%{http_code}' -K - || true
+}
+
+# vt17_judge NAME: VT-17 after a complete step 7, judged here rather than from
+# the tool's items: the install token is refused and has no row; the install
+# result and the input file are gone; the handoff is a root 0600 file with the
+# panel credentials and each user's addresses; the subscription server
+# listens on loopback only; deploy.conf holds the keys of detailed design 2.8.
+# Only judgments are archived.
+vt17_judge() {
+  local name="$1" code state uri
+  [ ! -e "$XUI_RESULT" ] || fail "$name: the install result is still there"
+  [ ! -e "$M2_INPUT" ] || fail "$name: the input file is still there"
+  code="$(token_http)"
+  [ "$code" = 401 ] || fail "$name: the install token got HTTP $code"
+  [ "$(vps_fn port_state 2096)" = loopback ] || fail "$name: the subscription server listens beyond loopback"
+  [ "$(stat -c '%F|%u|%a' /etc/vps-proxy-setup)" = 'directory|0|700' ] ||
+    fail "$name: /etc/vps-proxy-setup is not a root directory with mode 0700"
+  state="$(vps_fn xui_db_state)" || fail "$name: database not readable"
+  uri="$(vps_fn xui_db_uri "$state")" || fail "$name: database not readable"
+  python3 - "$uri" "$HANDOFF" "$DEPLOY_CONF" "$RESULT_COPY" "$TARGET_RECORD" "$(tool_version)" \
+    "$(vps_fn pin_value VPS_PIN_XUI_VERSION)" "$(vps_fn pin_value VPS_PIN_CLOUDFLARED_VERSION)" \
+    >"$phase_dir/$name-vt17.txt" <<'PY' || { cat "$phase_dir/$name-vt17.txt"; fail "$name: VT-17 checks failed"; }
+import json, os, re, sqlite3, stat, sys
+
+uri, handoff, conf, result, record, tool, xui, cfd = sys.argv[1:9]
+lines, fails = [], []
+
+
+def check(ok, what):
+    lines.append(('PASS ' if ok else 'FAIL ') + what)
+    if not ok:
+        fails.append(what)
+
+
+def root_0600(path):
+    st = os.lstat(path)
+    return stat.S_ISREG(st.st_mode) and st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o600
+
+
+def pairs(path):
+    out = {}
+    with open(path) as fh:
+        for line in fh:
+            key, _, value = line.rstrip('\n').partition('=')
+            out.setdefault(key, value)
+    return out
+
+
+con = sqlite3.connect(uri, uri=True, timeout=5)
+check(con.execute('SELECT count(*) FROM api_tokens').fetchone()[0] == 0, 'database: no API token left')
+paths = dict(con.execute("SELECT key, value FROM settings WHERE key IN ('subPath', 'subClashPath')").fetchall())
+clients = con.execute('SELECT email, sub_id FROM clients ORDER BY id').fetchall()
+con.close()
+
+
+def url(key, sub_id):
+    return 'https://sub.proxy.example/' + paths.get(key, '').strip('/') + '/' + sub_id
+
+
+res = pairs(result)
+check(root_0600(handoff), 'handoff: a root file with mode 0600')
+with open(handoff) as fh:
+    h = json.load(fh)
+p = h.get('panel') or {}
+check(set(h) == {'format', 'panel', 'users'} and h['format'] == 1
+      and set(p) == {'username', 'password', 'webBasePath', 'port'}, 'handoff: format 1 with the fields of 15.2')
+check(p.get('username') == res.get('XUI_USERNAME') and p.get('password') == res.get('XUI_PASSWORD'),
+      'handoff: the panel credentials of the install result')
+check(p.get('webBasePath') == '/' + res.get('XUI_WEB_BASE_PATH', '').strip('/') + '/'
+      and p.get('port') == int(res.get('XUI_PANEL_PORT', '0')), 'handoff: webBasePath and panel port')
+want = [{'email': e, 'subscriptionUrl': url('subPath', s), 'mihomoUrl': url('subClashPath', s)} for e, s in clients]
+check([e for e, _ in clients] == ['alice', 'bob'] and h.get('users') == want,
+      "handoff: each user's two addresses under https://<sub_host>/ with the kept paths")
+
+check(root_0600(conf), 'deploy.conf: a root file with mode 0600')
+rec = pairs(conf)
+expect = {'tool_version': tool, 'xui_version': xui, 'cloudflared_version': cfd, 'mode': 'deploy',
+          'sub_host': 'sub.proxy.example', 'node_ip': '192.0.2.1', 'target': 'target.example',
+          'target_check_time': pairs(record).get('time'), 'ipv6_ai_egress': 'off'}
+check(set(rec) == set(expect) | {'deployed_at'} and all(rec[k] == v for k, v in expect.items()),
+      'deploy.conf: the keys of detailed design 2.8 with the values of this deploy')
+check(re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z', rec.get('deployed_at', '')) is not None,
+      'deploy.conf: deployed_at in UTC')
+print(''.join(line + '\n' for line in lines), end='')
+sys.exit(1 if fails else 0)
+PY
+  log "$name: VT-17 checks passed"
 }
 
 # No private scratch directory of the tool is left behind (detailed design 2.6).
@@ -88,20 +217,22 @@ phase_vt11() {
   vt11_case unit fetch.unit "$(pin_of /etc/systemd/system/x-ui.service)"
 }
 
-# VT-10 and VT-16 through the deploy entry; VT-13 on its output.
+# VT-10, VT-16 and VT-17 through the deploy entry; VT-13 on its output.
 phase_vt10() {
   local port tuning out
   settle
   port="$(state_value panel_port)"
   tuning="$(sha256sum <"$TUNING_DROPIN")"
+  keeper_start
   deploy_yes vt10 "$TOOL" deploy --input "$M2_INPUT"
+  keeper_stop
   collect_markers
   expect_rc vt10 1
   expect_clean vt10
   expect_err vt10 '输入 yes 继续'
-  expect_err vt10 '[x] 第 1～6 步完成'
+  expect_err vt10 '[x] 第 1～7 步完成'
   expect_report vt10 PASS "${PREFLIGHT_PASS[@]}" "${FETCH_ITEMS[@]}" "${INSTALL_ITEMS[@]}" "${PREWRITE_ITEMS[@]}" \
-    "${WRITE_ITEMS[@]}"
+    "${WRITE_ITEMS[@]}" "${FINISH_ITEMS[@]}"
   expect_fails vt10
   expect_no_secret vt10
   expect_no_tmp vt10
@@ -117,7 +248,7 @@ phase_vt10() {
     fail 'VT-10: the 3x-ipl jail is loaded'
   fi
   [ "$(sha256sum <"$TUNING_DROPIN")" = "$tuning" ] || fail 'VT-10: 90-proxy-vps.conf changed'
-  [ -s "$XUI_RESULT" ] || fail 'VT-10: no install result to scan against'
+  vt17_judge vt10
   vt16_judge vt10 off
   scan_markers
 }
@@ -196,13 +327,15 @@ if real and fwd:
             {'type': 'field', 'inboundTag': [r['tag']], 'domain': ['geosite:cn'], 'outboundTag': 'blocked'},
             {'type': 'field', 'inboundTag': [r['tag']], 'ip': ['geoip:cn'], 'outboundTag': 'blocked'}]
     rules = (t.get('routing') or {}).get('rules') or []
-    check(rules[:4] == want, 'template: rules 1 to 4 of solution design 7.4 with the real tags')
-    # The rules of the default template of 3X-UI v3.11.0 follow unchanged (detailed design 17).
+    # The rules of the default template of 3X-UI v3.11.0 (detailed design 17). Every
+    # template save keeps the api rule first (EnsureStatsRouting).
     default = [{'inboundTag': ['api'], 'outboundTag': 'api', 'type': 'field'},
                {'ip': ['geoip:private'], 'outboundTag': 'blocked', 'type': 'field'},
                {'outboundTag': 'blocked', 'protocol': ['bittorrent'], 'type': 'field'}]
+    check(rules[:1] == default[:1] and rules[1:5] == want,
+          'template: the api rule, then rules 1 to 4 of solution design 7.4 with the real tags')
     if ipv6 == 'off':
-        check(rules[4:] == default, 'template: the default rules follow')
+        check(rules[5:] == default[1:], 'template: the other default rules follow')
         check(all(o.get('tag') != 'ai-ipv6' for o in t.get('outbounds') or []), 'template: no ai-ipv6 outbound')
     check((t.get('routing') or {}).get('domainStrategy', 'AsIs') == 'AsIs', 'template: domainStrategy AsIs')
     check([o.get('tag') for o in t.get('outbounds') or []][:2] == ['direct', 'blocked'],
@@ -291,17 +424,17 @@ rr_db = (json.loads(db['vless']['stream_settings']).get('realitySettings') or {}
 rr = ((real or {}).get('streamSettings') or {}).get('realitySettings') or {}
 check(all(rr.get(k) == rr_db.get(k) for k in ('target', 'serverNames', 'shortIds', 'privateKey')),
       'generated: REALITY target, serverNames, shortIds and key as in the database')
-check(((cfg.get('routing') or {}).get('rules') or [])[:4] == tpl['routing']['rules'][:4],
-      'generated: rules 1 to 4 as in the template')
+check(((cfg.get('routing') or {}).get('rules') or [])[:5] == tpl['routing']['rules'][:5],
+      'generated: the api rule and rules 1 to 4 as in the template')
 check([o.get('tag') for o in cfg.get('outbounds') or []][:1] == ['direct'], 'generated: direct first')
 sys.exit(1 if fails else 0)
 PY
 }
 
 # vt16_judge NAME IPV6: the database, then the generated configuration. 3X-UI
-# may give new users to the running Xray without rewriting the file, so the
-# file is judged after a restart of x-ui, as step 7 will do; the count before
-# is kept as evidence.
+# may give new users to the running Xray without rewriting the file, and the
+# panel restart of step 7 does not restart Xray (SIGHUP, main.go), so the file
+# is judged after a restart of x-ui; the count before is kept as evidence.
 vt16_judge() {
   local name="$1"
   vt16_db "$name" "$2" || fail "$name: VT-16 database checks failed"
@@ -500,6 +633,74 @@ phase_vt15_inbound() { vt15_case inbound fresh.inbounds; }
 phase_vt15_client() { vt15_case client fresh.clients; }
 phase_vt15_settings() { vt15_case settings fresh.settings; }
 
+# The driver of VT-17 for the token, run through deploy_fn: the whole deploy,
+# with the request function replaced so that the response to the token delete
+# is lost, after the request was sent (MODE lost) or without sending it (MODE
+# unsent) (detailed design 19). The confirmation is answered on stdin.
+# shellcheck disable=SC2031,SC2034 # runs inside deploy_fn; the module reads VPS_VERSION
+vt17_token() {
+  trap vps_cleanup EXIT
+  VPS_VERSION="$(tool_version)"
+  VT17_MODE="$1"
+  eval "vt17_api_call() $(declare -f api_call | sed 1d)"
+  # shellcheck disable=SC2329 # replaces the function of the module
+  api_call() {
+    if [[ "$2" == setting/apiTokens/delete/* ]]; then
+      [ "$VT17_MODE" = unsent ] || vt17_api_call "$@" || true
+      VPS_API_HTTP=000
+      return 1
+    fi
+    vt17_api_call "$@"
+  }
+  cmd_deploy --input "$M2_INPUT" <<<yes
+}
+
+# A lost response to a delete that took effect: step 7 proves the revocation
+# by the refused token and the missing row, and completes.
+phase_vt17_lost() {
+  local name=vt17-lost
+  settle
+  keeper_start
+  capture "$name" deploy_fn vt17_token lost
+  keeper_stop
+  collect_markers
+  expect_rc "$name" 1
+  expect_clean "$name"
+  expect_err "$name" '[x] 第 1～7 步完成'
+  expect_report "$name" PASS "${WRITE_ITEMS[@]}" "${FINISH_ITEMS[@]}"
+  expect_fails "$name"
+  vt17_judge "$name"
+  expect_no_secret "$name"
+  expect_no_tmp "$name"
+  scan_markers
+}
+
+# A lost response to a delete that never arrived: the token still works, so
+# step 7 must not call it revoked; it stops and keeps the install result and
+# the input file (detailed design 15.3).
+phase_vt17_unsent() {
+  local name=vt17-unsent code
+  settle
+  keeper_start
+  capture "$name" deploy_fn vt17_token unsent
+  keeper_stop
+  collect_markers
+  expect_rc "$name" 1
+  expect_clean "$name"
+  expect_err "$name" '[x] 第 7 步未完成：安装 token 的撤销结果未知'
+  expect_report "$name" PASS finish.restart finish.sub finish.handoff
+  expect_fails "$name" finish.token
+  code="$(token_http)"
+  [ "$code" = 200 ] || fail "$name: the install token got HTTP $code; it should still be valid"
+  [ -s "$XUI_RESULT" ] || fail "$name: the install result is gone"
+  [ -s "$M2_INPUT" ] || fail "$name: the input file is gone"
+  [ -s "$HANDOFF" ] || fail "$name: no handoff"
+  [ ! -e "$DEPLOY_CONF" ] || fail "$name: deploy.conf was written"
+  expect_no_secret "$name"
+  expect_no_tmp "$name"
+  scan_markers
+}
+
 # The driver of VT-18 for users, run through deploy_fn: the whole deploy, with
 # the request function replaced so that the second clients/add is refused
 # (MODE refused), or is sent and its response lost (MODE lost) (detailed
@@ -569,8 +770,61 @@ vt18_case() {
   scan_markers
 }
 
+# VT-18, continued: the documented cleanup (solution design 7.3), after which
+# the preflight passes with 90-proxy-vps.conf in place, a new deploy completes
+# and the strict verification of vps-tuning passes. Removing
+# /etc/vps-proxy-setup also removes the target-check result, so target-check
+# runs again against the stand-in, as the preflight asks.
+vt18_redeploy() {
+  local tuning saved="$PRIVATE/90-proxy-vps.conf"
+  tuning="$(sha256sum <"$TUNING_DROPIN")"
+  cp -p "$TUNING_DROPIN" "$saved"
+  printf 'y\n' | x-ui uninstall >"$phase_dir/vt18-uninstall.txt" 2>&1 || true
+  [ ! -e /usr/local/x-ui ] && [ ! -e /etc/x-ui ] || fail 'vt18: x-ui uninstall left 3X-UI behind'
+  install -d -m 0755 "${TUNING_DROPIN%/*}"
+  cp -p "$saved" "$TUNING_DROPIN"
+  rm -rf /etc/vps-proxy-setup
+  systemctl daemon-reload
+  [ "$(sha256sum <"$TUNING_DROPIN")" = "$tuning" ] || fail 'vt18: 90-proxy-vps.conf was not restored'
+
+  netns_pair vpsns-standin vps-standin0 198.51.100.1 "$STANDIN"
+  standin strict
+  capture vt18-target-check "$TOOL" target-check target.example
+  expect_rc vt18-target-check 0
+  write_input "$M2_INPUT"
+  # The preflight alone: end of file at the confirmation cancels.
+  capture_tty vt18-preflight "$TOOL" deploy --input "$M2_INPUT"
+  expect_rc vt18-preflight 1
+  expect_err vt18-preflight '[x] 已取消，主机未改动'
+  expect_report vt18-preflight PASS "${PREFLIGHT_PASS[@]}"
+  expect_fails vt18-preflight
+
+  keeper_start
+  deploy_yes vt18-redeploy "$TOOL" deploy --input "$M2_INPUT"
+  keeper_stop
+  # The secrets of the first deploy stay markers too.
+  cp "$PRIVATE/markers" "$PRIVATE/markers-first"
+  collect_markers
+  sort -u -o "$PRIVATE/markers" "$PRIVATE/markers" "$PRIVATE/markers-first"
+  expect_rc vt18-redeploy 1
+  expect_clean vt18-redeploy
+  expect_err vt18-redeploy '[x] 第 1～7 步完成'
+  expect_report vt18-redeploy PASS "${FETCH_ITEMS[@]}" "${INSTALL_ITEMS[@]}" "${PREWRITE_ITEMS[@]}" \
+    "${WRITE_ITEMS[@]}" "${FINISH_ITEMS[@]}"
+  expect_fails vt18-redeploy
+  vt16_db vt18-redeploy off >/dev/null || fail 'vt18-redeploy: VT-16 database checks failed'
+  vt17_judge vt18-redeploy
+  [ "$(sha256sum <"$TUNING_DROPIN")" = "$tuning" ] || fail 'vt18-redeploy: 90-proxy-vps.conf changed'
+  capture vt18-tuning-strict env REQUIRE_PROXY_SERVICE=1 PROXY_SERVICE_UNITS=x-ui.service dvt verify
+  expect_rc vt18-tuning-strict 0
+  expect_no_secret vt18-redeploy
+  expect_no_tmp vt18-redeploy
+  scan_markers
+}
+
 phase_vt18_refused() {
   vt18_case refused '创建使用者 bob被拒绝' $'alice\ninbound tunnel\ninbound vless'
+  vt18_redeploy
 }
 
 # A lost response: the user was written, and the deploy says the result is unknown.
