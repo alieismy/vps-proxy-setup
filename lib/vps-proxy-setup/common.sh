@@ -124,11 +124,17 @@ vps_tmp_init() {
 
 # Said on stderr when the process exits before a command clears it: an
 # internal error or a signal ended the command before its result was in place.
+# Once VPS_EXIT_NOTE_TMP names the temporary file that a rename puts in place,
+# the note is said only while that file is still there: a signal that arrives
+# during the rename runs its trap after the rename has completed.
 VPS_EXIT_NOTE=''
+VPS_EXIT_NOTE_TMP=''
 
 vps_cleanup() {
   local path
-  [ -z "$VPS_EXIT_NOTE" ] || printf '%s\n' "$VPS_EXIT_NOTE" >&2 || true
+  if [ -n "$VPS_EXIT_NOTE" ] && { [ -z "$VPS_EXIT_NOTE_TMP" ] || [ -e "$VPS_EXIT_NOTE_TMP" ]; }; then
+    printf '%s\n' "$VPS_EXIT_NOTE" >&2 || true
+  fi
   for path in "${VPS_CLEANUP[@]}"; do
     rm -f -- "$path"
   done

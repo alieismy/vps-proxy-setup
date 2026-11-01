@@ -10,9 +10,12 @@ that the cross-authority probes of target-check have something to find
 every body and 32 MiB after it: the bodies differ only past the 4 MiB that
 target-check reads (detailed design 5), so they compare equal if, and only
 if, it stops there, and a client that stops leaves most of each body unsent.
+--early, with --large, moves the difference one byte earlier, to the last byte
+that target-check reads, so the bodies compare equal only if it reads less.
 --http1-only offers only http/1.1 in ALPN, so an h2 client falls back to it.
---delay SECONDS holds every HTTP response that long, for a client to be
-interrupted while it waits.
+--delay SECONDS holds every HTTP response that long; --arrivals FILE gets a
+line as each request arrives, before that wait, so that a client can be
+interrupted while it waits for the response.
 
 Every TCP connection is logged as one JSON line: time, peer, SNI, ALPN and,
 for each request, the protocol, the Host or :authority received, the path,
@@ -49,9 +52,11 @@ class StandIn:
         self.mode = args.mode
         self.large = args.large
         self.delay = args.delay
-        # Large: the host name sits right at PREFIX, and the two names differ in
-        # their first byte.
-        self.bodies = {name: b'.' * PREFIX + name.encode() + b'.' * LARGE if args.large else body
+        self.arrivals = args.arrivals
+        # Large: the host name sits right at PREFIX (one byte before it with
+        # --early), and the two names differ in their first byte.
+        split = PREFIX - 1 if args.early else PREFIX
+        self.bodies = {name: b'.' * split + name.encode() + b'.' * LARGE if args.large else body
                        for name, body in BODIES.items()}
         self.log_path = args.log
         self.log_lock = threading.Lock()
@@ -70,6 +75,11 @@ class StandIn:
     def log(self, record):
         with self.log_lock, open(self.log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(record, sort_keys=True) + '\n')
+
+    def arrived(self, proto):
+        if self.arrivals:
+            with self.log_lock, open(self.arrivals, 'a', encoding='utf-8') as f:
+                f.write(f'{time.time():.3f} {proto}\n')
 
     def route(self, sni, host):
         name = sni if self.mode == 'strict' else (host or '').rsplit(':', 1)[0].lower()
@@ -110,6 +120,7 @@ class StandIn:
             headers[key.strip().lower()] = value.strip()
         host = headers.get('host', '')
         status, body = self.route(sni, host)
+        self.arrived('http/1.1')
         time.sleep(self.delay)
         # Logged before the body: a client that stops reading ends the send.
         request = {'proto': 'http/1.1', 'host': host, 'path': words[1] if len(words) > 1 else '',
@@ -138,6 +149,7 @@ class StandIn:
                     headers = {text(k): text(v) for k, v in event.headers}
                     authority = headers.get(':authority', '')
                     status, body = self.route(sni, authority)
+                    self.arrived('h2')
                     time.sleep(self.delay)
                     request = {'proto': 'h2', 'authority': authority, 'host': headers.get('host'),
                                'path': headers.get(':path', ''), 'status': status, 'complete': False}
@@ -189,8 +201,10 @@ def main():
     parser.add_argument('--mode', choices=['strict', 'cross'], required=True)
     parser.add_argument('--large', action='store_true',
                         help='the same 4 MiB before every body and 32 MiB after it')
+    parser.add_argument('--early', action='store_true', help='with --large, the bodies differ one byte earlier')
     parser.add_argument('--http1-only', action='store_true', help='offer only http/1.1 in ALPN')
     parser.add_argument('--delay', type=float, default=0, help='seconds to hold every HTTP response')
+    parser.add_argument('--arrivals', help='file that gets a line as each request arrives')
     parser.add_argument('--listen', default='198.51.100.2')
     parser.add_argument('--port', type=int, default=443)
     parser.add_argument('--cert', required=True, help='leaf certificate followed by the test CA')

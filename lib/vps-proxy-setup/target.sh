@@ -93,10 +93,12 @@ url_host() {
   printf '%s\n' "${rest,,}"
 }
 
+# A gate stop is a result, not an interruption, so it clears the exit note.
 tc_check_root_deps() {
   local cmd missing=()
   if [ "$(id -u)" -ne 0 ]; then
     tc_report FAIL root '必须以 root 运行'
+    VPS_EXIT_NOTE=''
     stop_at_gate
   fi
   tc_report PASS root '以 root 运行'
@@ -105,6 +107,7 @@ tc_check_root_deps() {
   done
   if [ "${#missing[@]}" -gt 0 ]; then
     tc_report FAIL deps "缺少命令：$(join_by ' ' "${missing[@]}")；请安装 curl openssl libc-bin coreutils"
+    VPS_EXIT_NOTE=''
     stop_at_gate
   fi
   tc_report PASS deps '依赖的命令齐全'
@@ -168,6 +171,8 @@ tc_publish() {
     return 1
   }
   VPS_CLEANUP+=("$tmp")
+  # From here the exit note depends on whether the rename below has happened.
+  VPS_EXIT_NOTE_TMP="$tmp"
   if ! {
     {
       printf 'format=1\nversion=%s\ntime=%s\ntarget=%s\nprobe_host=%s\n' \
@@ -184,9 +189,6 @@ tc_publish() {
     printf '[x] 写入 %s 失败，结果未发布\n' "$VPS_TARGET_DIR/$VPS_TC_TARGET" >&2
     return 1
   fi
-  # Published: cleared before any output, so a failure to print cannot
-  # report the new record as not updated.
-  VPS_EXIT_NOTE=''
   printf '\n结果已写入 %s\n' "$VPS_TARGET_DIR/$VPS_TC_TARGET"
 }
 
@@ -223,11 +225,12 @@ cmd_target_check() {
   hostname_reason "$VPS_TC_PROBE" 2 || usage_error "--probe-host 不合法：$VPS_REASON"
   [ "$VPS_TC_PROBE" != "$VPS_TC_TARGET" ] || usage_error '--probe-host 不能与目标相同'
 
+  # From the end of the argument checks until the record is renamed into
+  # place, an internal error or a signal leaves the old record, and the exit
+  # says so (detailed design 2.7).
+  VPS_EXIT_NOTE="[x] target-check 中途结束，结果未发布；$VPS_TARGET_DIR/$VPS_TC_TARGET 本次未更新"
   tc_check_root_deps
   vps_tmp_init
-  # Until the record is renamed into place, an internal error or a signal
-  # leaves the old one, and the exit says so (detailed design 2.7).
-  VPS_EXIT_NOTE="[x] target-check 中途结束，结果未发布；$VPS_TARGET_DIR/$VPS_TC_TARGET 本次未更新"
   VPS_TC_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   resolved="$(getent ahosts -- "$VPS_TC_TARGET" 2>/dev/null)" || resolved=''

@@ -882,12 +882,22 @@ phase_vt80() {
   # The 4 MiB read limit (detailed design 5), after the capture: with cross
   # routing, the bodies of the two hosts share their first 4 MiB and differ
   # after it. Both probes compare equal only if each read stops at 4 MiB; one
-  # byte more and they would fail. The stand-in also saw no body read to the end.
+  # byte more and they would fail.
   standin cross --large
   target_case vt81-large 0 target.example --probe-host other.example
   expect_report vt81-large PASS http.root probe.host probe.authority
   [ "$(grep -cE '^\[PASS\] probe\.(host|authority) +探测请求返回 200，内容与基准相同' "$phase_dir/vt81-large.out")" -eq 2 ] ||
     fail 'vt81-large: the probes did not compare equal on the first 4 MiB'
+  # The other bound: the bodies differ at the last byte of the first 4 MiB,
+  # which a read or comparison of less would miss.
+  standin cross --large --early
+  target_case vt81-large-early 1 target.example --probe-host other.example
+  expect_fails vt81-large-early probe.host probe.authority
+  expect_report vt81-large-early PASS http.root
+  [ "$(grep -c '可能交叉路由' "$phase_dir/vt81-large-early.out")" -eq 2 ] ||
+    fail 'vt81-large-early: the probes did not find the difference at the last byte of 4 MiB'
+  record_ok FAIL large-early
+  # In both cases the stand-in sent no body to the end.
   jq -s -e '[.[] | select(.large == true) | .requests[]] | length > 0 and all(.complete == false)' \
     "$EVIDENCE/standin/connections.jsonl" >/dev/null || fail 'vt81-large: a body was sent to the end'
 
@@ -902,20 +912,22 @@ phase_vt80() {
     fail 'vt80-http1: http.root and probe.authority do not both report the missing HTTP/2'
   record_ok FAIL http1
 
-  # The responses wait 60 seconds, so target-check is still in its HTTP checks
-  # when the signal comes.
-  standin strict --delay 60
   vt80_term
-  standin strict
 }
 
-# vt80-term: TERM before the record is written (detailed design 2.7): exit
-# 143, the previous record stays, nothing is left behind, and stderr says that
-# the record was not updated.
+# vt80-term: TERM before the record is written (detailed design 2.7), while
+# curl waits for the response to the first HTTP request: exit 143, the
+# previous record stays, nothing is left behind, and stderr says that the
+# record was not updated.
 vt80_term() {
-  local record=/etc/vps-proxy-setup/target-check/target.example before tmp_before pid rc=0 i
+  local record=/etc/vps-proxy-setup/target-check/target.example arrivals="$PRIVATE/vt80-term.arrivals"
+  local before tmp_before pid rc=0 i
   before="$(sha256sum <"$record")"
   tmp_before="$(compgen -G '/tmp/vps-proxy-setup.*' || true)"
+  rm -f "$arrivals"
+  # The responses wait 60 seconds, longer than curl's own limit, and the
+  # stand-in notes each request as it arrives.
+  standin strict --delay 60 --arrivals "$arrivals"
   observe_begin vt80-term
   # Its own process group, so the signal reaches the shell and the curl it
   # waits for, as a terminal's would. A background job is not a group leader,
@@ -923,10 +935,10 @@ vt80_term() {
   setsid "$TOOL" target-check target.example </dev/null >"$phase_dir/vt80-term.out" 2>"$phase_dir/vt80-term.err" &
   pid=$!
   for i in $(seq 150); do
-    if grep -qE '^\[INFO\] tls\.group ' "$phase_dir/vt80-term.out"; then
+    if [ -s "$arrivals" ]; then
       break
     fi
-    [ "$i" -lt 150 ] || fail 'vt80-term: target-check did not reach its HTTP checks'
+    [ "$i" -lt 150 ] || fail 'vt80-term: no HTTP request reached the stand-in'
     sleep 0.2
   done
   # The third field after the command name in /proc/PID/stat is the process group.
@@ -938,6 +950,12 @@ vt80_term() {
   log "vt80-term: exit $rc"
   sed 's/^/    /' "$phase_dir/vt80-term.out" "$phase_dir/vt80-term.err"
   observe_end vt80-term
+  # Times and protocols only: one request, the h2 request for /, had arrived.
+  cp "$arrivals" "$phase_dir/vt80-term-arrivals.txt"
+  rm -f "$arrivals"
+  standin strict
+  [ "$(awk '{ print $2 }' "$phase_dir/vt80-term-arrivals.txt")" = h2 ] ||
+    fail 'vt80-term: the signal did not come during the first request'
   expect_rc vt80-term 143
   expect_clean vt80-term
   expect_err vt80-term '本次未更新'
