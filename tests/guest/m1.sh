@@ -1251,7 +1251,9 @@ con = sqlite3.connect(sys.argv[1], uri=True, timeout=5)
 queries = ["SELECT value FROM settings WHERE key IN ('webBasePath', 'subPath', 'subClashPath', 'subJsonPath', "
            "'secret', 'subURI', 'subClashURI', 'subJsonURI')",
            'SELECT username FROM users', 'SELECT password FROM users', 'SELECT uuid FROM clients',
-           'SELECT sub_id FROM clients', 'SELECT token FROM api_tokens']
+           'SELECT sub_id FROM clients', 'SELECT token FROM api_tokens',
+           "SELECT json_extract(stream_settings, '$.realitySettings.privateKey') FROM inbounds",
+           "SELECT json_extract(stream_settings, '$.realitySettings.shortIds[0]') FROM inbounds"]
 for query in queries:
     try:
         for (value,) in con.execute(query):

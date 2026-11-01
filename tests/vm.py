@@ -630,10 +630,28 @@ def m2_deploy(ctx, main):
         guest.phase('vt11', script='m2.sh')
         guest.poweroff()
     # The input file, the test token and a fresh target-check result are on this disk.
-    for name in ('vt10', 'vt12', 'vt13-fail'):
+    names = ('vt10', 'vt12', 'vt13-fail', 'vt15-inbound', 'vt15-client', 'vt15-settings', 'vt18-refused',
+             'vt18-lost', 'vt18-short-id')
+    for name in names:
         with Guest(ctx, name, ctx.overlay(disk, f'{name}.qcow2')) as guest:
             guest.phase(name, script='m2.sh')
             guest.poweroff()
+    judge_short_ids(ctx, names)
+
+
+def judge_short_ids(ctx, names):
+    """VT-16: every deploy of the run generated its own shortId. The guests
+    archive only a digest of it."""
+    digests = {}
+    for name in names:
+        for path in sorted((ctx.evidence / name / 'guest' / name).glob('*sid-digest.txt')):
+            digests[f'{name}/{path.name}'] = path.read_text().strip()
+    lines = ''.join(f'{k} {v}\n' for k, v in sorted(digests.items()))
+    (ctx.evidence / 'vt16-short-ids.txt').write_text(lines)
+    if len(digests) < 3:
+        ctx.fail(f'VT-16: only {len(digests)} shortId digests to compare')
+    elif len(set(digests.values())) != len(digests):
+        ctx.fail('VT-16: two deploys of the run have the same shortId')
 
 
 SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy}

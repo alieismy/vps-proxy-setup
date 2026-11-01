@@ -1,8 +1,9 @@
 # shellcheck shell=bash
 # deploy (detailed design 2.5, 16.1). After the preflight and the
 # administrator's confirmation: fetch and verify the 3X-UI files (step 2), run
-# the verified installer (step 3) and verify what it installed (step 4). The
-# steps after 4 come later in M2 and in M3.
+# the verified installer (step 3), verify what it installed (step 4), check
+# that nothing is configured yet (step 5) and write the configuration through
+# the panel API (step 6). The steps after 6 come later in M2 and in M3.
 # Globals defined here are read by the tests through the module, which
 # ShellCheck checks separately.
 # shellcheck disable=SC2034
@@ -282,6 +283,482 @@ deploy_verify_install() {
   [ "$VPS_COUNT_FAIL" -eq "$before" ] || deploy_stop 4 "$VPS_CLEANUP_HINT"
 }
 
+# --- Steps 5 and 6: the panel API (detailed design 15) ------------------------
+
+readonly VPS_FORWARDER_REMARK='vps-proxy-setup-forwarder'
+readonly VPS_AI_TAG='ai-ipv6'
+# Keys that step 6 writes, and the template. On a new install none of them is
+# in the settings table, so each has its built-in default. The subscription
+# paths are random from the first start and are kept (16.1 step 6).
+readonly VPS_WRITTEN_KEYS='subEnable subListen subPort subDomain subCertFile subKeyFile subURI subClashURI
+subClashEnable subClashEnableRouting subClashRules subJsonEnable subInfoNodeEnable subUpdates remarkTemplate
+xrayTemplateConfig'
+# Fields of the settings view that are not settings (15.1).
+readonly VPS_VIEW_KEYS='["hasTgBotToken","hasTwoFactorToken","hasLdapPassword","hasApiToken","hasWarpSecret",
+"hasNordSecret","hasSmtpPassword","hasDiscordBotToken"]'
+# covers($want): every field of $want is in the input with the same value;
+# arrays and scalars compare whole. The panel adds fields of its own.
+# shellcheck disable=SC2016 # jq code
+readonly VPS_JQ_COVERS='def covers($want): . as $got
+  | if ($want | type) == "object" then
+      ($got | type) == "object" and
+        all($want | to_entries[]; . as $e | ($got | has($e.key)) and ($got[$e.key] | covers($e.value)))
+    else $got == $want end;'
+
+# Install result and token, in memory only (15.2).
+VPS_XUI_USER=''
+VPS_XUI_PASS=''
+VPS_XUI_BASE=''
+VPS_XUI_TOKEN=''
+VPS_TOKEN_ID=''
+# The last API call.
+VPS_API_HTTP=''
+VPS_API_OUT=''
+# What step 6 created, for the step reports and the tests.
+VPS_FWD_ID=''
+VPS_FWD_TAG=''
+VPS_REALITY_ID=''
+VPS_REALITY_TAG=''
+VPS_DONE=()
+
+# install_result_read: the fields of 15.2 from install-result.env, read once
+# from one descriptor, without source or eval. Only the plain forms that the
+# installer's random values have are accepted; the panel port must be the one
+# vps-hardening recorded. Sets VPS_REASON on failure, never with a value.
+install_result_read() {
+  local file="$VPS_XUI_DB_DIR/install-result.env" fd attrs content rest line key
+  local -A got=()
+  if [ ! -f "$file" ] || [ -L "$file" ]; then
+    VPS_REASON='没有安装结果，或者它不是普通文件'
+    return 1
+  fi
+  if ! { exec {fd}<"$file"; } 2>/dev/null; then
+    VPS_REASON='无法打开安装结果'
+    return 1
+  fi
+  attrs="$(stat -L -c '%F|%u|%a' "/proc/$$/fd/$fd" 2>/dev/null)" || attrs=''
+  if [ "$attrs" != 'regular file|0|600' ]; then
+    exec {fd}<&-
+    VPS_REASON='安装结果不是属于 root、权限 0600 的普通文件'
+    return 1
+  fi
+  { content="$(cat <&"$fd")"; } 2>/dev/null || content=''
+  exec {fd}<&-
+  # Split by parameter expansion: a here-string could put the secrets in a
+  # temporary file (detailed design 8).
+  rest="$content"
+  while [ -n "$rest" ]; do
+    line="${rest%%$'\n'*}"
+    if [ "$line" = "$rest" ]; then rest=''; else rest="${rest#*$'\n'}"; fi
+    key="${line%%=*}"
+    case "$key" in
+      XUI_USERNAME | XUI_PASSWORD | XUI_PANEL_PORT | XUI_WEB_BASE_PATH | XUI_API_TOKEN) ;;
+      *) continue ;;
+    esac
+    if [ -n "${got[$key]+x}" ]; then
+      VPS_REASON="安装结果中 $key 重复"
+      return 1
+    fi
+    got[$key]="${line#*=}"
+  done
+  for key in XUI_USERNAME XUI_PASSWORD; do
+    if ! [[ "${got[$key]-}" =~ ^[A-Za-z0-9]{10}$ ]]; then
+      VPS_REASON="安装结果中 $key 不是 10 个字母数字"
+      return 1
+    fi
+  done
+  if ! [[ "${got[XUI_WEB_BASE_PATH]-}" =~ ^[A-Za-z0-9]{18}$ ]]; then
+    VPS_REASON='安装结果中 XUI_WEB_BASE_PATH 不是 18 个字母数字'
+    return 1
+  fi
+  if ! [[ "${got[XUI_API_TOKEN]-}" =~ ^[A-Za-z0-9]{48}$ ]]; then
+    VPS_REASON='安装结果中 XUI_API_TOKEN 不是 48 个字母数字'
+    return 1
+  fi
+  if [ "${got[XUI_PANEL_PORT]-}" != "$VPS_PANEL_PORT" ]; then
+    VPS_REASON='安装结果中的面板端口不是 vps-hardening 记录的端口'
+    return 1
+  fi
+  VPS_XUI_USER="${got[XUI_USERNAME]}"
+  VPS_XUI_PASS="${got[XUI_PASSWORD]}"
+  VPS_XUI_BASE="${got[XUI_WEB_BASE_PATH]}"
+  VPS_XUI_TOKEN="${got[XUI_API_TOKEN]}"
+}
+
+# api_call METHOD PATH [BODY_FILE [CONTENT_TYPE]]: one request to the panel on
+# loopback (15.1). The URL holds webBasePath and the header the token, so both
+# reach curl as a config on stdin, never as arguments. No proxy, no redirects,
+# no retry. The response goes to the private file VPS_API_OUT and VPS_API_HTTP
+# is the status. Returns 1 when no response came (connection failure or time
+# bound): for a write the result is then unknown. The tests replace this
+# function to lose a response or fail a request (detailed design 19).
+api_call() {
+  local method="$1" path="$2" body="${3-}" ctype="${4-application/json}" code
+  local -a data=()
+  VPS_API_OUT="$VPS_TMP/api-response"
+  rm -f -- "$VPS_API_OUT"
+  [ -z "$body" ] || data=(-H "Content-Type: $ctype" --data-binary "@$body")
+  VPS_API_HTTP=000
+  if ! code="$({
+    printf 'url = "http://127.0.0.1:%s/%s/panel/api/%s"\n' "$VPS_PANEL_PORT" "$VPS_XUI_BASE" "$path"
+    printf 'header = "Authorization: Bearer %s"\n' "$VPS_XUI_TOKEN"
+  } | curl -q --silent --noproxy '*' --proto '=http' --connect-timeout 5 --max-time 30 -X "$method" \
+    "${data[@]}" -o "$VPS_API_OUT" -w '%{http_code}' -K - 2>/dev/null)"; then
+    return 1
+  fi
+  VPS_API_HTTP="$code"
+}
+
+# api_ok JQ: HTTP 200, "success" true and "obj" passing the jq test JQ. The
+# message text is never used to decide (15.1).
+api_ok() {
+  [ "$VPS_API_HTTP" = 200 ] && jq -e "(.success == true) and (.obj | $1)" -- "$VPS_API_OUT" >/dev/null 2>&1
+}
+
+# api_read METHOD PATH JQ: a read, tried once more after a connection failure
+# (15.3). Only for paths without a write side effect in the current state.
+api_read() {
+  api_call "$1" "$2" || api_call "$1" "$2" || return 1
+  api_ok "$3"
+}
+
+# api_write METHOD PATH BODY CONTENT_TYPE JQ: a write, sent once (15.3).
+# Returns 0 on success, 1 on a clear refusal, 2 when the result is unknown: no
+# response, or a response that is neither a success nor a refusal.
+api_write() {
+  api_call "$1" "$2" "$3" "$4" || return 2
+  if api_ok "$5"; then
+    return 0
+  fi
+  if [ "$VPS_API_HTTP" = 200 ] && jq -e '.success == false' -- "$VPS_API_OUT" >/dev/null 2>&1; then
+    return 1
+  fi
+  case "$VPS_API_HTTP" in
+    4[0-9][0-9]) return 1 ;;
+  esac
+  return 2
+}
+
+# write_stop REASON: step 6 stops; says what is written (16.1).
+write_stop() {
+  local done='还没有写入业务配置'
+  [ "${#VPS_DONE[@]}" -eq 0 ] || done="已写入：$(join_by '、' "${VPS_DONE[@]}")；其后的写入未执行"
+  deploy_stop 6 "$1。$done。$VPS_CLEANUP_HINT"
+}
+
+# write_failed ITEM WHAT STATUS: report a write that did not succeed.
+write_failed() {
+  if [ "$3" -eq 1 ]; then
+    report FAIL "$1" "$2被拒绝（HTTP $VPS_API_HTTP）"
+    write_stop "$2被拒绝"
+  fi
+  report FAIL "$1" "$2的结果未知（HTTP $VPS_API_HTTP），可能已经写入"
+  write_stop "$2的结果未知，可能已经写入，要在面板中核对"
+}
+
+# Step 5: before any business write (16.1, VT-15). What decides a refusal comes
+# from the read-only snapshot of 4.1; POST /xray/, which can write, is not
+# called on this path. Input and install result are kept on a refusal.
+deploy_prewrite() {
+  local before="$VPS_COUNT_FAIL" out n present
+  if out="$(timeout --kill-after=5 10 "$VPS_XUI_BIN" -v 2>/dev/null)" && [ "$out" = "$VPS_PIN_XUI_VERSION" ]; then
+    report PASS fresh.version "3X-UI $VPS_PIN_XUI_VERSION"
+  else
+    report FAIL fresh.version "$VPS_XUI_BIN -v 失败或不是 $VPS_PIN_XUI_VERSION"
+  fi
+  if ! xui_snapshot; then
+    report FAIL fresh.db "无法读取数据库：$VPS_REASON"
+    deploy_stop 5 "未写入业务配置；输入文件和安装结果保留。$VPS_CLEANUP_HINT"
+  fi
+  n="$(jq '.inbounds | length' <<<"$VPS_XUI_SNAPSHOT")"
+  if [ "$n" = 0 ]; then
+    report PASS fresh.inbounds '没有入站'
+  else
+    report FAIL fresh.inbounds "已有 $n 个入站"
+  fi
+  n="$(jq '.clients | length' <<<"$VPS_XUI_SNAPSHOT")"
+  if [ "$n" = 0 ]; then
+    report PASS fresh.clients '没有使用者'
+  else
+    report FAIL fresh.clients "已有 $n 个使用者"
+  fi
+  present="$(jq -r --arg keys "$VPS_WRITTEN_KEYS" \
+    '($keys | split("\\s+"; null)) as $k | [(.settings // {}) | keys[] | select(IN($k[]))] | join(" ")' \
+    <<<"$VPS_XUI_SNAPSHOT")"
+  if [ -z "$present" ]; then
+    report PASS fresh.settings '订阅设置和 Xray 模板仍是新装的默认值'
+  else
+    report FAIL fresh.settings "设置表中已有：$present"
+  fi
+  pf_target_checked
+  [ "$VPS_COUNT_FAIL" -eq "$before" ] ||
+    deploy_stop 5 "这台主机已有业务配置，或者 target 的核实结果失效；未写入业务配置，输入文件和安装结果保留。$VPS_CLEANUP_HINT"
+
+  if install_result_read; then
+    report PASS install.result '安装结果的格式符合预期'
+  else
+    report FAIL install.result "$VPS_REASON"
+    deploy_stop 5 "未写入业务配置；输入文件和安装结果保留。$VPS_CLEANUP_HINT"
+  fi
+  # The fresh install has exactly one token: "install", enabled, admin.
+  if ! api_read GET setting/apiTokens 'type == "array"'; then
+    report FAIL api.token "无法用安装 token 列出 token（HTTP $VPS_API_HTTP）"
+    deploy_stop 5 "未写入业务配置；输入文件和安装结果保留。$VPS_CLEANUP_HINT"
+  fi
+  VPS_TOKEN_ID="$(jq -r '.obj | if length == 1 and .[0].name == "install" and .[0].enabled == true
+    and .[0].scope == "admin" and (.[0].id | type) == "number" then .[0].id else empty end' -- "$VPS_API_OUT")"
+  if [ -z "$VPS_TOKEN_ID" ]; then
+    report FAIL api.token "token 不是唯一一个启用的 admin 范围的 install（共 $(jq '.obj | length' -- "$VPS_API_OUT") 个）"
+    deploy_stop 5 "未写入业务配置；输入文件和安装结果保留。$VPS_CLEANUP_HINT"
+  fi
+  report PASS api.token '安装 token 可用，是唯一一个 admin 范围的 token'
+}
+
+# new_short_id: 16 lowercase hex characters from OpenSSL's random source (15.1,
+# requirements D28). The tests replace this function (VT-18).
+new_short_id() {
+  openssl rand -hex 8 2>/dev/null
+}
+
+# key_is_x25519 FIELD: the field of the key response is base64url for 32
+# bytes. The key goes through pipes only.
+key_is_x25519() {
+  local n
+  n="$(jq -r --arg f "$1" '.obj[$f]' -- "$VPS_TMP/x25519.json" | tr -d '\n' | tr '_-' '/+' |
+    { IFS= read -r k || true; [[ "$k" =~ ^[A-Za-z0-9+/]{43}$ ]] && printf '%s=' "$k"; } | base64 -d 2>/dev/null | wc -c)"
+  [ "$n" = 32 ]
+}
+
+# inbound_add ITEM WHAT BODY: create one inbound, then find it again in the
+# list by the ID of the response and compare what was sent (15.1). Sets
+# VPS_NEW_ID and VPS_NEW_TAG.
+VPS_NEW_ID=''
+VPS_NEW_TAG=''
+inbound_add() {
+  local item="$1" what="$2" body="$3" rc=0 id
+  api_write POST inbounds/add "$body" application/json '(.id | type) == "number"' || rc=$?
+  [ "$rc" -eq 0 ] || write_failed "$item" "创建$what" "$rc"
+  id="$(jq '.obj.id' -- "$VPS_API_OUT")"
+  if ! api_read GET inbounds/list 'type == "array"'; then
+    report FAIL "$item" "创建$what之后无法读取入站（HTTP $VPS_API_HTTP）"
+    VPS_DONE+=("$what（未核对）")
+    write_stop "无法核对$what"
+  fi
+  if ! jq -e --argjson id "$id" --slurpfile want "$body" "$VPS_JQ_COVERS"'
+    [.obj[] | select(.id == $id)] | length == 1 and (.[0].tag | type) == "string" and (.[0].tag != "")
+      and (.[0] | covers($want[0] | del(.nodeId, .settings.clients)))' -- "$VPS_API_OUT" >/dev/null; then
+    report FAIL "$item" "$what读回与请求不一致"
+    VPS_DONE+=("$what（读回不一致）")
+    write_stop "$what读回与请求不一致"
+  fi
+  VPS_NEW_ID="$id"
+  VPS_NEW_TAG="$(jq -r --argjson id "$id" '.obj[] | select(.id == $id) | .tag' -- "$VPS_API_OUT")"
+  VPS_DONE+=("$what")
+}
+
+# Step 6: the business configuration (16.1, 15.1, 17; 4.4 for FR-13). Each
+# write is checked by reading it back; a failure stops with what is written
+# so far, and nothing is undone (FR-12, VT-18).
+deploy_write() {
+  local target="${VPS_IN[target]}" sub_host="${VPS_IN[sub_host]}" ipv6="${VPS_IN[ipv6_ai_egress]}"
+  local rc=0 sid email n
+
+  # Reads first; after step 5 /xray/ reads without writing (14).
+  if ! api_read POST setting/all 'type == "object"'; then
+    report FAIL write.settings "无法读取设置（HTTP $VPS_API_HTTP）"
+    write_stop '无法读取设置'
+  fi
+  install -m 0600 -- "$VPS_API_OUT" "$VPS_TMP/settings-read.json"
+  if ! api_read POST xray/ 'type == "string" and (fromjson? | (.xraySetting | type) == "object"
+      and (.outboundTestUrl | type) == "string")'; then
+    report FAIL write.template "无法读取 Xray 模板（HTTP $VPS_API_HTTP）"
+    write_stop '无法读取 Xray 模板'
+  fi
+  jq '.obj | fromjson' -- "$VPS_API_OUT" >"$VPS_TMP/template-read.json"
+  # The default template of the fixed version (14): one direct freedom, one
+  # blocked blackhole, AsIs; with FR-13 also no dns (4.2 routing.ai-ipv6).
+  if ! jq -e --arg ipv6 "$ipv6" '.xraySetting
+      | ([.outbounds[]? | select(.tag == "direct" and .protocol == "freedom")] | length == 1)
+      and ([.outbounds[]? | select(.tag == "blocked" and .protocol == "blackhole")] | length == 1)
+      and (.outbounds[0].tag == "direct")
+      and ([.outbounds[]? | select(.tag == "'"$VPS_AI_TAG"'")] | length == 0)
+      and ((.routing.domainStrategy // "AsIs") == "AsIs")
+      and ((.routing.rules // []) | type == "array")
+      and ($ipv6 == "off" or (has("dns") | not))' -- "$VPS_TMP/template-read.json" >/dev/null; then
+    report FAIL write.template 'Xray 模板不是固定版本的默认模板'
+    write_stop 'Xray 模板不是预期的默认模板'
+  fi
+
+  # Keys: the pair from the panel's Xray, the shortId here (15.1). Both stay in
+  # the private directory and in memory.
+  if ! api_read GET server/getNewX25519Cert '(.privateKey | type) == "string" and (.publicKey | type) == "string"'; then
+    report FAIL keys.x25519 "无法生成 REALITY 密钥对（HTTP $VPS_API_HTTP）"
+    write_stop '无法生成 REALITY 密钥对'
+  fi
+  install -m 0600 -- "$VPS_API_OUT" "$VPS_TMP/x25519.json"
+  if ! key_is_x25519 privateKey || ! key_is_x25519 publicKey; then
+    report FAIL keys.x25519 'REALITY 密钥对不是 32 字节的 base64url'
+    write_stop 'REALITY 密钥对无效'
+  fi
+  report PASS keys.x25519 'REALITY 密钥对由面板生成'
+  if ! sid="$(new_short_id)" || ! [[ "$sid" =~ ^[0-9a-f]{16}$ ]]; then
+    report FAIL keys.short-id 'openssl rand -hex 8 失败，或输出不是 16 个小写十六进制字符'
+    write_stop 'shortId 生成失败，REALITY 入站未创建'
+  fi
+  report PASS keys.short-id 'shortId 由 openssl rand -hex 8 生成'
+
+  # Subscription settings: setting/update replaces every setting, so the
+  # whole view goes back with only these keys changed (15.1, solution design
+  # 7.5). subClashRules waits for the rule text (DO-9) and keeps its default.
+  jq --arg dom "$sub_host" --argjson view "$VPS_VIEW_KEYS" '.obj | delpaths([$view[] | [.]])
+    | .subEnable = true | .subListen = "127.0.0.1" | .subPort = '"$VPS_PORT_SUB"' | .subDomain = $dom
+    | .subCertFile = "" | .subKeyFile = "" | .subClashEnable = true | .subClashEnableRouting = true
+    | .subJsonEnable = false | .subInfoNodeEnable = false | .subUpdates = 12 | .remarkTemplate = "{{INBOUND}}"
+    | .subURI = ("https://" + $dom + .subPath) | .subClashURI = ("https://" + $dom + .subClashPath)' \
+    -- "$VPS_TMP/settings-read.json" >"$VPS_TMP/settings-write.json"
+  api_write POST setting/update "$VPS_TMP/settings-write.json" application/json 'true' || rc=$?
+  [ "$rc" -eq 0 ] || write_failed write.settings '写订阅设置' "$rc"
+  if ! api_read POST setting/all 'type == "object"'; then
+    report FAIL write.settings "写入后无法读取设置（HTTP $VPS_API_HTTP）"
+    VPS_DONE+=('订阅设置（未核对）')
+    write_stop '无法核对订阅设置'
+  fi
+  n="$(jq -r --argjson view "$VPS_VIEW_KEYS" --slurpfile want "$VPS_TMP/settings-write.json" '.obj
+    | delpaths([$view[] | [.]]) as $got | [($want[0] | keys[]) as $k | select($got[$k] != $want[0][$k]) | $k]
+      + [$got | keys[] | . as $k | select($want[0] | has($k) | not)] | join(" ")' -- "$VPS_API_OUT")"
+  if [ -n "$n" ]; then
+    report FAIL write.settings "读回与写入不一致的设置：$n"
+    VPS_DONE+=('订阅设置（读回不一致）')
+    write_stop '订阅设置读回与写入不一致'
+  fi
+  report PASS write.settings "订阅设置已写入并读回一致（订阅主机名 $sub_host，127.0.0.1:$VPS_PORT_SUB）"
+  VPS_DONE+=('订阅设置')
+
+  # The loopback forwarder, then REALITY (17).
+  jq -n --arg remark "$VPS_FORWARDER_REMARK" '{enable: true, remark: $remark, listen: "127.0.0.1",
+    port: '"$VPS_PORT_FORWARDER"', protocol: "tunnel", expiryTime: 0, total: 0, nodeId: null,
+    settings: {rewriteAddress: "127.0.0.1", rewritePort: 443, allowedNetwork: "tcp", followRedirect: false},
+    streamSettings: {network: "tcp", security: "none", tcpSettings: {acceptProxyProtocol: false,
+      header: {type: "none"}}},
+    sniffing: {enabled: true, destOverride: ["tls"], metadataOnly: false, routeOnly: false}}' \
+    >"$VPS_TMP/forwarder.json"
+  inbound_add write.forwarder 转发入站 "$VPS_TMP/forwarder.json"
+  VPS_FWD_ID="$VPS_NEW_ID"
+  VPS_FWD_TAG="$VPS_NEW_TAG"
+  report PASS write.forwarder "转发入站已创建并读回一致（127.0.0.1:$VPS_PORT_FORWARDER，tag $VPS_FWD_TAG）"
+
+  # The shortId reaches jq on stdin, the keys from the private file (8, 15.1).
+  printf '%s' "$sid" | jq -Rs --slurpfile k "$VPS_TMP/x25519.json" --arg remark "${VPS_IN[remark]}" \
+    --arg target "$target" --arg node "${VPS_IN[node_ip]}" '. as $sid | {enable: true, remark: $remark,
+    listen: "", port: '"$VPS_PORT_REALITY"', protocol: "vless", expiryTime: 0, total: 0, nodeId: null,
+    shareAddrStrategy: "custom", shareAddr: $node, excludeFromSub: false, disableFlow: false,
+    settings: {clients: [], decryption: "none", encryption: "none"},
+    streamSettings: {network: "tcp", security: "reality",
+      tcpSettings: {acceptProxyProtocol: false, header: {type: "none"}},
+      realitySettings: {show: false, xver: 0, target: "127.0.0.1:'"$VPS_PORT_FORWARDER"'",
+        serverNames: [$target], privateKey: $k[0].obj.privateKey, shortIds: [$sid],
+        settings: {publicKey: $k[0].obj.publicKey, fingerprint: "chrome", serverName: "", spiderX: "/"}}},
+    sniffing: {enabled: false}}' >"$VPS_TMP/reality.json"
+  sid=''
+  inbound_add write.reality 'REALITY 入站' "$VPS_TMP/reality.json"
+  VPS_REALITY_ID="$VPS_NEW_ID"
+  VPS_REALITY_TAG="$VPS_NEW_TAG"
+  report PASS write.reality "REALITY 入站已创建并读回一致（443，target $target，tag $VPS_REALITY_TAG）"
+
+  deploy_write_template
+  deploy_write_clients
+}
+
+# The routing of solution design 7.4 with the real tags, in front of the
+# template's own rules; with FR-13 the outbound and rule of 4.4. Before that
+# write, the panel's own Xray must load the FR-13 rule (16.1 step 6, 14).
+deploy_write_template() {
+  local target="${VPS_IN[target]}" ipv6="${VPS_IN[ipv6_ai_egress]}" rc=0
+  jq --arg fwd "$VPS_FWD_TAG" --arg real "$VPS_REALITY_TAG" --arg target "$target" --arg ipv6 "$ipv6" \
+    --arg ai "$VPS_AI_TAG" '.xraySetting
+    | (.outbounds[] | select(.tag == "direct") | .settings.finalRules) as $final
+    | .routing.rules = ([
+        {type: "field", inboundTag: [$fwd], domain: ["full:" + $target], outboundTag: "direct"},
+        {type: "field", inboundTag: [$fwd], outboundTag: "blocked"},
+        {type: "field", inboundTag: [$real], domain: ["geosite:cn"], outboundTag: "blocked"},
+        {type: "field", inboundTag: [$real], ip: ["geoip:cn"], outboundTag: "blocked"}]
+      + (if $ipv6 == "on" then [{type: "field", inboundTag: [$real],
+          domain: ["geosite:openai", "geosite:anthropic"], outboundTag: $ai}] else [] end)
+      + (.routing.rules // []))
+    | if $ipv6 == "on" then .outbounds += [{tag: $ai, protocol: "freedom", settings: {finalRules: $final},
+        streamSettings: {sockopt: {domainStrategy: "ForceIPv6v4"}}}] else . end' \
+    -- "$VPS_TMP/template-read.json" >"$VPS_TMP/template-write.json"
+
+  if [ "$ipv6" = on ]; then
+    jq --arg ai "$VPS_AI_TAG" '{log: {loglevel: "none"}, outbounds: [.outbounds[] | select(.tag == $ai)],
+      routing: {rules: [.routing.rules[] | select(.outboundTag == $ai)]}}' \
+      -- "$VPS_TMP/template-write.json" >"$VPS_TMP/ai-test.json"
+    if XRAY_LOCATION_ASSET="$VPS_XUI_DIR/bin" timeout --kill-after=5 30 "$VPS_XUI_XRAY" run -test \
+      -c "$VPS_TMP/ai-test.json" </dev/null >/dev/null 2>&1; then
+      report PASS template.geosite '自带的 Xray 能加载 geosite:openai、geosite:anthropic 的规则'
+    else
+      report FAIL template.geosite '自带的 Xray 不能加载 geosite:openai、geosite:anthropic 的规则（geosite.dat 可能缺少类别）'
+      write_stop 'FR-13 的规则无法加载，Xray 模板未写入'
+    fi
+  fi
+
+  jq -rn --rawfile x "$VPS_TMP/template-write.json" --slurpfile r "$VPS_TMP/template-read.json" \
+    '"xraySetting=" + ($x | rtrimstr("\n") | @uri) + "&outboundTestUrl=" + ($r[0].outboundTestUrl | @uri)' \
+    >"$VPS_TMP/template-form"
+  api_write POST xray/update "$VPS_TMP/template-form" application/x-www-form-urlencoded 'true' || rc=$?
+  [ "$rc" -eq 0 ] || write_failed write.template '写 Xray 模板' "$rc"
+  if ! api_read POST xray/ 'type == "string"' ||
+    ! jq -e --slurpfile want "$VPS_TMP/template-write.json" --slurpfile r "$VPS_TMP/template-read.json" \
+      '.obj | fromjson | .xraySetting == $want[0] and .outboundTestUrl == $r[0].outboundTestUrl' \
+      -- "$VPS_API_OUT" >/dev/null 2>&1; then
+    report FAIL write.template "Xray 模板读回与写入不一致（HTTP $VPS_API_HTTP）"
+    VPS_DONE+=('Xray 模板（读回不一致）')
+    write_stop 'Xray 模板读回与写入不一致'
+  fi
+  if [ "$ipv6" = on ]; then
+    report PASS write.template "路由已写入并读回一致：方案设计第 7.4 节的四条规则和 FR-13 的第五条"
+  else
+    report PASS write.template '路由已写入并读回一致：方案设计第 7.4 节的四条规则'
+  fi
+  VPS_DONE+=('Xray 模板')
+}
+
+# One user at a time, each read back (15.1). The UUID and subscription ID come
+# from the panel and must differ between users; they stay in the private
+# directory for step 7.
+deploy_write_clients() {
+  local email rc emails=() n
+  IFS=, read -r -a emails <<<"${VPS_IN[users]}"
+  : >"$VPS_TMP/clients.jsonl"
+  for email in "${emails[@]}"; do
+    jq -n --arg email "$email" --argjson id "$VPS_REALITY_ID" '{client: {email: $email, enable: true,
+      flow: "xtls-rprx-vision", limitIp: 0, totalGB: 0, expiryTime: 0, tgId: 0}, inboundIds: [$id]}' \
+      >"$VPS_TMP/client.json"
+    rc=0
+    api_write POST clients/add "$VPS_TMP/client.json" application/json 'true' || rc=$?
+    [ "$rc" -eq 0 ] || write_failed write.clients "创建使用者 $email" "$rc"
+    if ! api_read GET "clients/get/$email" '(.client | type) == "object" and (.inboundIds | type) == "array"' ||
+      ! jq -e --arg email "$email" --argjson id "$VPS_REALITY_ID" '.obj | .client.email == $email
+        and .client.enable == true and .client.flow == "xtls-rprx-vision" and .inboundIds == [$id]
+        and (.client.uuid | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))
+        and (.client.subId | type == "string" and length > 0)' -- "$VPS_API_OUT" >/dev/null 2>&1; then
+      report FAIL write.clients "使用者 $email 读回与请求不一致（HTTP $VPS_API_HTTP）"
+      VPS_DONE+=("使用者 $email（读回不一致）")
+      write_stop "使用者 $email 读回与请求不一致"
+    fi
+    jq -c '{email: .obj.client.email, uuid: .obj.client.uuid, subId: .obj.client.subId}' -- "$VPS_API_OUT" \
+      >>"$VPS_TMP/clients.jsonl"
+    VPS_DONE+=("使用者 $email")
+  done
+  n="${#emails[@]}"
+  if ! jq -se --argjson n "$n" 'length == $n and (map(.uuid) | unique | length) == $n
+      and (map(.subId) | unique | length) == $n' -- "$VPS_TMP/clients.jsonl" >/dev/null; then
+    report FAIL write.clients '使用者的 UUID 或订阅 ID 有重复'
+    write_stop '使用者的 UUID 或订阅 ID 有重复'
+  fi
+  report PASS write.clients "$n 个使用者已创建并读回一致：${VPS_IN[users]}"
+}
+
 cmd_deploy() {
   parse_deploy_args "$@"
   check_root_gate
@@ -316,6 +793,12 @@ cmd_deploy() {
   deploy_step 4 '核对安装结果'
   deploy_verify_install
 
-  printf '\n[x] 第 1～4 步完成：3X-UI 已安装并核对，面板只监听 127.0.0.1。第 5 步起尚未实现（M2 开发中）；输入文件保留\n' >&2
+  deploy_step 5 '写入前核对'
+  deploy_prewrite
+
+  deploy_step 6 '写入业务配置'
+  deploy_write
+
+  printf '\n[x] 第 1～6 步完成：业务配置已写入并读回一致。第 7 步起尚未实现（M2 开发中）：面板未重启，订阅仍按旧设置监听，安装 token 未撤销；输入文件和安装结果保留\n' >&2
   exit "$VPS_EXIT_FAIL"
 }
