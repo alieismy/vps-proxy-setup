@@ -1,10 +1,10 @@
 # vps-proxy-setup
 
-Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.6, solution design v1.4 and verification plan v1.3 and detailed design v1.0 approved, with contracts assigned to milestones; M1 implementation next; nothing to install yet.**
+Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.6, solution design v1.4 and verification plan v1.3 approved; detailed design v1.1 (v1.0 approved, plus one read rule from the M1 evidence, confirmed), with contracts assigned to milestones. M1 is implemented and passes the VM tests: `deploy` runs the preflight only, plus `check`, `target-check` and `install.sh`; deployment comes in M2. No release yet, so nothing to install.**
 
 在已经用 [vps-hardening](https://github.com/alieismy/vps-hardening) 加固的 Debian/Ubuntu VPS 上搭建代理服务，以 3X-UI 为例。
 
-**当前状态：[需求规格说明](docs/requirements.md) v1.6 已批准，[方案设计](docs/solution-design.md) v1.4 已批准，[验证计划](docs/verification-plan.md) v1.3 已批准，[详细设计](docs/detailed-design.md) v1.0 已批准，各契约按里程碑实现和验证，下一步实现 M1；还没有可用的脚本或发行版。**
+**当前状态：[需求规格说明](docs/requirements.md) v1.6 已批准，[方案设计](docs/solution-design.md) v1.4 已批准，[验证计划](docs/verification-plan.md) v1.3 已批准，[详细设计](docs/detailed-design.md) v1.1（v1.0 已批准，按 M1 的运行证据补的一行读取前提已确认），各契约按里程碑实现和验证。M1 已实现并在虚拟机测试中通过：`deploy` 只做预检，另有 `check`、`target-check` 和 `install.sh`；部署从 M2 开始。还没有发行版，因此还不能安装。**
 
 ## 与另外两个仓库的关系
 
@@ -60,7 +60,7 @@ v0.4 按需求 U7 增加：
 
 [验证计划](docs/verification-plan.md) v1.0 已批准（需求 U15、D23）：CI 虚拟机用 Debian 13 amd64，在客体内用两个网络命名空间分别放 Mihomo 客户端和 target 替身，FR-02 的负面用例在转发入站的外连侧取三处证据；真实的 Tunnel、真实 target 和三个客户端在测试 VPS 上验收（要另行授权）。之后是详细设计和实现。v1.1 已批准（需求 U17、D25）：M5 补充节点不可用时的订阅恢复场景，VT-86 核对 `--migrate` 之后新机连接器未启用，FR-13 的用例列为 VO-8。v1.2 已批准（需求 U22、D33）：补入 FR-13 的用例 VT-32～VT-34（双栈替身、外连隔离，IPv6 失败时确认没有改走 IPv4），关闭 VO-8。v1.3 已批准（需求 U23、D34）：按 CodeRabbit 的意见，VT-16 核对各次部署的 shortId 互不相同，VT-18 增加 shortId 生成失败的注入，FR-13 的 VT-32、VT-34 分别判定 TCP 和 UDP。
 
-[详细设计](docs/detailed-design.md) v1.0 已批准（需求 U24、D35）：内容与 v0.2 草案的最后一版相同，批准的是契约，不是运行结果；下一步新开分支实现 M1。v0.2 草案保留并修订 M1 的命令、预检、只读检查、`target-check` 和测试框架；补充 3X-UI API 与凭据生命周期、写入和备份恢复顺序、REALITY SNI 边界、Tunnel 动态用户与生效状态检查、测试注入接缝。实现和验证仍按 M1～M5 推进；规则文本、实际运行行为及待决事项没有被视为完成。shortId 生成来源与上游文字的差异（DO-12）已按需求 D28 关闭；DO-7、VO-5、VO-7 仍待用户决定。本次补充 IPv4 订阅、监听与双栈出站的分层契约；相关 Xray 核心修复评估列为 DO-13（已选定等 3X-UI 的修复版，需求 D30），OpenAI/Anthropic 的 IPv6 出站策略列为 DO-14（对应需求 FR-13），路由保持 `AsIs`。DO-14 的检查细节已在草案中冻结：部署输入 `ipv6_ai_egress`（`on`/`off`），检查项 `routing.ai-ipv6`、`ipv6.egress`，启用而没有可用的 IPv6 时预检拒绝，可用地址多于一个时警告，这些取值已获批准（需求 D33）；草案的其余部分随 v1.0 一并批准，实现尚未开始。
+[详细设计](docs/detailed-design.md) v1.0 已批准（需求 U24、D35）：内容与 v0.2 草案的最后一版相同，批准的是契约，不是运行结果。v1.1 按 M1 的运行证据更新（第 10 节）：第 4.1 节补的一行读取前提（x-ui 已停止而两个侧文件都在时不读取数据库）已确认（需求 U25、D36），DO-1、DO-3、DO-8 关闭；验证计划第 3.5 节留到它的后续版本再同步 VO-1 的结果。v0.2 草案保留并修订 M1 的命令、预检、只读检查、`target-check` 和测试框架；补充 3X-UI API 与凭据生命周期、写入和备份恢复顺序、REALITY SNI 边界、Tunnel 动态用户与生效状态检查、测试注入接缝。实现和验证仍按 M1～M5 推进；规则文本、实际运行行为及待决事项没有被视为完成。shortId 生成来源与上游文字的差异（DO-12）已按需求 D28 关闭；DO-7、VO-5、VO-7 仍待用户决定。本次补充 IPv4 订阅、监听与双栈出站的分层契约；相关 Xray 核心修复评估列为 DO-13（已选定等 3X-UI 的修复版，需求 D30），OpenAI/Anthropic 的 IPv6 出站策略列为 DO-14（对应需求 FR-13），路由保持 `AsIs`。DO-14 的检查细节已在草案中冻结：部署输入 `ipv6_ai_egress`（`on`/`off`），检查项 `routing.ai-ipv6`、`ipv6.egress`，启用而没有可用的 IPv6 时预检拒绝，可用地址多于一个时警告，这些取值已获批准（需求 D33）；草案的其余部分随 v1.0 一并批准；M1 已实现，M2 起还没有实现。
 
 ## 许可证
 
