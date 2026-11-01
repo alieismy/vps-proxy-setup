@@ -650,7 +650,8 @@ ck_cloudflared() {
   loopback_item cfd.metrics "$VPS_PORT_CFD_METRICS" 'cloudflared metrics'
 
   # --noproxy: curl also sends loopback requests to an inherited http_proxy.
-  if ready="$(curl -sS --noproxy '*' --max-time 5 -w '\n%{http_code}' \
+  # -q, which must come first, skips .curlrc.
+  if ready="$(curl -q -sS --noproxy '*' --max-time 5 -w '\n%{http_code}' \
     "http://127.0.0.1:$VPS_PORT_CFD_METRICS/ready" 2>/dev/null)" &&
     [ "${ready##*$'\n'}" = 200 ] &&
     jq -e '.readyConnections > 0' <<<"${ready%$'\n'*}" >/dev/null 2>&1; then
@@ -685,7 +686,7 @@ ck_cfd_routes() {
     report FAIL cfd.routes '没有可核对的订阅主机名'
     return 0
   fi
-  if ! cfg="$(curl -sS --noproxy '*' --max-time 5 "http://127.0.0.1:$VPS_PORT_CFD_METRICS/config" 2>/dev/null)"; then
+  if ! cfg="$(curl -q -sS --noproxy '*' --max-time 5 "http://127.0.0.1:$VPS_PORT_CFD_METRICS/config" 2>/dev/null)"; then
     report FAIL cfd.routes '/config 读取失败'
     return 0
   fi
@@ -711,7 +712,6 @@ cmd_check() {
   check_root_gate
   check_platform_gate
   deps_report deps "${VPS_CHECK_DEPS[@]}" || stop_at_gate
-  tcp_listeners_load
 
   VPS_XUI_VERSION_OK=0
   ck_xui_program
@@ -741,6 +741,9 @@ cmd_check() {
     report PASS xui.db '数据库只读快照有效'
   fi
 
+  # Read just before the listener items (panel.listen among the items below,
+  # listen.* after them), not at the start of the run.
+  tcp_listeners_load
   for id in "${VPS_DB_ITEMS[@]}"; do
     if [ "$VPS_DB_OK" -ne 1 ]; then
       report SKIP "$id" '数据库不可读（由 xui.version 或 xui.db 报告）'
@@ -770,6 +773,7 @@ cmd_check() {
   ck_secrets_absent
   ck_state_perms
   ck_record
+  tcp_listeners_load # again for cfd.metrics
   ck_cloudflared
 
   status="$(hardening_verify_status)"

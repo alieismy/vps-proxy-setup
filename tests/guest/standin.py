@@ -6,9 +6,10 @@ one certificate of the per-run test CA, each host with its own fixed body.
 --mode strict routes by SNI and ignores Host and :authority; --mode cross
 routes by Host or :authority, as a server that mixes virtual hosts would, so
 that the cross-authority probes of target-check have something to find
-(VT-81). An unknown host gets 404. --large adds 32 MiB to every body, far
-over the 4 MiB that target-check reads (detailed design 5), so a client that
-stops there leaves most of each body unsent.
+(VT-81). An unknown host gets 404. --large puts the same 4 MiB in front of
+every body and 32 MiB after it: the bodies differ only past the 4 MiB that
+target-check reads (detailed design 5), so they compare equal if, and only
+if, it stops there, and a client that stops leaves most of each body unsent.
 
 Every TCP connection is logged as one JSON line: time, peer, SNI, ALPN and,
 for each request, the protocol, the Host or :authority received, the path,
@@ -32,6 +33,7 @@ BODIES = {
     'other.example': b'stand-in other.example\n',
 }
 REASONS = {200: 'OK', 404: 'Not Found'}
+PREFIX = 4 << 20  # VPS_BODY_MAX in lib/vps-proxy-setup/target.sh
 LARGE = 32 << 20
 
 
@@ -43,7 +45,10 @@ class StandIn:
     def __init__(self, args):
         self.mode = args.mode
         self.large = args.large
-        self.bodies = {name: body + b'.' * LARGE if args.large else body for name, body in BODIES.items()}
+        # Large: the host name sits right at PREFIX, and the two names differ in
+        # their first byte.
+        self.bodies = {name: b'.' * PREFIX + name.encode() + b'.' * LARGE if args.large else body
+                       for name, body in BODIES.items()}
         self.log_path = args.log
         self.log_lock = threading.Lock()
         self.sni = {}
@@ -176,7 +181,8 @@ class StandIn:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['strict', 'cross'], required=True)
-    parser.add_argument('--large', action='store_true', help='add 32 MiB to every body')
+    parser.add_argument('--large', action='store_true',
+                        help='the same 4 MiB before every body and 32 MiB after it')
     parser.add_argument('--listen', default='198.51.100.2')
     parser.add_argument('--port', type=int, default=443)
     parser.add_argument('--cert', required=True, help='leaf certificate followed by the test CA')

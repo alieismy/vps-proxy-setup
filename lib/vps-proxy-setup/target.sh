@@ -54,8 +54,9 @@ http_fetch() {
   # head stops the transfer at VPS_BODY_MAX (detailed design 5) and curl then
   # ends with 23, a write error. The status goes to stderr, which carries
   # nothing else without --show-error. --noproxy keeps these requests direct,
-  # like the TLS probe, when https_proxy is inherited.
-  local -a opts=(--silent --noproxy '*' --max-time "$VPS_TLS_TIMEOUT" --connect-timeout "$VPS_TLS_TIMEOUT"
+  # like the TLS probe, when https_proxy is inherited. -q, which must come
+  # first, skips .curlrc: a "location" there would follow the redirects.
+  local -a opts=(-q --silent --noproxy '*' --max-time "$VPS_TLS_TIMEOUT" --connect-timeout "$VPS_TLS_TIMEOUT"
     --proto '=https' --output - --write-out '%{stderr}%{http_code} %{redirect_url}')
   if [ "$proto" = h2 ]; then
     opts+=(--http2)

@@ -875,15 +875,17 @@ phase_vt80() {
   start_time_sync
   judge_capture
 
-  # Bodies over 4 MiB (detailed design 5), after the capture: target-check reads
-  # 4 MiB of each and still finds the cross routing by content, and the
-  # stand-in could send none of the 32 MiB bodies to the end.
+  # The 4 MiB read limit (detailed design 5), after the capture: with cross
+  # routing, the bodies of the two hosts share their first 4 MiB and differ
+  # after it. Both probes compare equal only if each read stops at 4 MiB; one
+  # byte more and they would fail. The stand-in also saw no body read to the end.
   standin cross --large
-  target_case vt81-large 1 target.example --probe-host other.example
-  expect_fails vt81-large probe.host probe.authority
-  expect_report vt81-large PASS http.root
+  target_case vt81-large 0 target.example --probe-host other.example
+  expect_report vt81-large PASS http.root probe.host probe.authority
+  [ "$(grep -cE '^\[PASS\] probe\.(host|authority) +探测请求返回 200，内容与基准相同' "$phase_dir/vt81-large.out")" -eq 2 ] ||
+    fail 'vt81-large: the probes did not compare equal on the first 4 MiB'
   jq -s -e '[.[] | select(.large == true) | .requests[]] | length > 0 and all(.complete == false)' \
-    "$EVIDENCE/standin/connections.jsonl" >/dev/null || fail 'vt81-large: a body was read past 4 MiB'
+    "$EVIDENCE/standin/connections.jsonl" >/dev/null || fail 'vt81-large: a body was sent to the end'
   standin strict
 }
 
