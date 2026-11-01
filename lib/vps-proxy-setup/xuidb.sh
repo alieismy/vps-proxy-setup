@@ -143,22 +143,26 @@ xui_db_state() {
   printf '%s %s %s %s %s %s\n' "$active" "$sub" "$pid" "$wal" "$shm" "$journal"
 }
 
-# xui_db_uri STATE: the open mode for the state, or 1 with VPS_REASON set
-# (the table in detailed design 4.1).
+# xui_db_uri STATE: the open mode for the state, printed and kept in
+# VPS_XUI_URI, or 1 with VPS_REASON set (the table in detailed design 4.1).
+VPS_XUI_URI=''
 xui_db_uri() {
   local active sub wal shm journal
+  VPS_XUI_URI=''
   read -r active sub _ wal shm journal <<<"$1"
   if [ "$journal" = 1 ]; then
     VPS_REASON='有 -journal，不尝试恢复可能的热日志'
     return 1
   fi
   if [ "$active" = active ] && [ "$sub" = running ] && [ "$wal" = 1 ] && [ "$shm" = 1 ]; then
-    printf 'file:%s?mode=ro\n' "$VPS_XUI_DB"
+    VPS_XUI_URI="file:$VPS_XUI_DB?mode=ro"
+    printf '%s\n' "$VPS_XUI_URI"
     return 0
   fi
   if { [ "$active" = inactive ] || [ "$active" = failed ]; } && { [ "$sub" = dead ] || [ "$sub" = failed ]; } &&
     [ "$wal" = 0 ] && [ "$shm" = 0 ]; then
-    printf 'file:%s?mode=ro&immutable=1\n' "$VPS_XUI_DB"
+    VPS_XUI_URI="file:$VPS_XUI_DB?mode=ro&immutable=1"
+    printf '%s\n' "$VPS_XUI_URI"
     return 0
   fi
   VPS_REASON="x-ui 处于 $active/$sub，-wal、-shm 存在与否为 $wal/$shm，不满足读取前提"
@@ -178,7 +182,9 @@ xui_snapshot() {
     VPS_REASON='无法读取 x-ui 的服务状态'
     return 1
   fi
-  uri="$(xui_db_uri "$before")" || return 1
+  # Called in this shell: inside $(...) the reason of a refusal would be lost.
+  xui_db_uri "$before" >/dev/null || return 1
+  uri="$VPS_XUI_URI"
   if ! out="$(xui_sqlite "$uri" "$(xui_snapshot_sql)" 2>/dev/null)"; then
     VPS_REASON='sqlite3 报错或超时'
     return 1
