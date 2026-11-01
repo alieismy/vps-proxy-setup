@@ -440,6 +440,35 @@ wait_xui_stopped() {
   return 1
 }
 
+# stop_xui NAME: stop x-ui and keep which side files it leaves (DO-1). If any
+# remain, check must refuse that state and leave it as it was; the driver then
+# folds the WAL into the database as the last connection, which removes both
+# side files: the stopped state the immutable read is for (detailed design 4.1).
+stop_xui() {
+  local name="$1" ext
+  systemctl stop x-ui.service
+  wait_xui_stopped || true
+  case "$(systemctl is-active x-ui.service 2>/dev/null || true)" in
+    inactive | failed) ;;
+    *) fail 'x-ui did not stop' ;;
+  esac
+  {
+    systemctl show -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus x-ui.service
+    for ext in wal shm journal; do
+      [ ! -e "$XUI_DB-$ext" ] || stat -c '%n %s bytes' -- "$XUI_DB-$ext"
+    done
+  } >"$phase_dir/$name-stopped.txt"
+  log "$name: after stop: $(tr '\n' ' ' <"$phase_dir/$name-stopped.txt")"
+  [ "$(side wal)$(side shm)" != 00 ] || return 0
+  observe "$name-sides" capture "$TOOL" check
+  expect_rc "$name-sides" 1
+  expect_clean "$name-sides"
+  expect_report "$name-sides" FAIL xui.db
+  expect_text "$name-sides" '不满足读取前提'
+  sqlite3 -batch -init /dev/null "$XUI_DB" 'PRAGMA wal_checkpoint(TRUNCATE);' >/dev/null
+  [ "$(side wal)$(side shm)" = 00 ] || fail 'side files remain after the driver checkpoint'
+}
+
 record_platform() {
   local pkg
   {
@@ -1277,8 +1306,7 @@ phase_vt72() {
   [ -f /etc/x-ui/.x-ui-backup-vt72/marker ] || fail 'the backup directory is gone'
 
   # Stopped: read with immutable=1; the file itself must not change.
-  systemctl stop x-ui.service
-  wait_xui_stopped || fail 'side files remain after x-ui stopped (DO-1)'
+  stop_xui vt72
   write_refused write-immutable "file:$XUI_DB?mode=ro&immutable=1"
   no_probe_table "file:$XUI_DB?mode=ro&immutable=1"
   before="$(sha256sum <"$XUI_DB")"
@@ -1300,9 +1328,10 @@ phase_vt72() {
 phase_vt75() {
   local db wal
   settle
+  # vt72 runs before on the same disk and may have stopped with x-ui stopped.
+  systemctl start x-ui.service
   wait_xui_stable
-  systemctl stop x-ui.service
-  wait_xui_stopped || fail 'side files remain after x-ui stopped (DO-1)'
+  stop_xui vt75
   : >"$XUI_DB-wal"
   db="$(sha256sum <"$XUI_DB")"
   wal="$(sha256sum <"$XUI_DB-wal")"
