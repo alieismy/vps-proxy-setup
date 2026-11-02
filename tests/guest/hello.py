@@ -20,9 +20,10 @@ certificate is verified against the system store, where the test CA is
 trusted (detailed design 9.2).
 
 Each attempt prints one JSON line: the shape, the ClientHello size and its
-key-share groups, the sizes sent and the gaps measured between them, the TLS
-version, the ALPN, the HTTP status, whether the body is the expected one, and
-the error if any. The exit status is 0 only if every attempt got the body.
+key-share groups, the sizes planned, the sizes sent before any error and the
+gaps measured between them, the TLS version, the ALPN, the HTTP status,
+whether the body is the expected one, and the error if any. The exit status is
+0 only if every attempt got the body.
 """
 import argparse
 import json
@@ -103,18 +104,20 @@ def attempt(args, ctx, shape):
             if shape == 'large' and MLKEM not in groups:
                 raise ValueError('the ClientHello has no X25519MLKEM768 key share')
             pieces, pauses = shape_pieces(shape, record, name_at, name_len)
+            # Filled in as each piece goes out, so that a connection closed
+            # partway shows how far the ClientHello got.
             sent, gaps, last = [], [], None
+            result.update(planned=[len(p) for p in pieces], sent=sent, gaps=gaps)
+            if shape == 'records':
+                result['records'] = count_records(pieces[0])
             for piece, pause in zip(pieces, pauses):
                 time.sleep(pause)
                 now = time.monotonic()
+                sock.sendall(piece)
                 if last is not None:
                     gaps.append(round(now - last, 3))
-                sock.sendall(piece)
-                last = now
                 sent.append(len(piece))
-            result.update(sent=sent, gaps=gaps)
-            if shape == 'records':
-                result['records'] = count_records(pieces[0])
+                last = now
 
             def pump():
                 data = outgoing.read()

@@ -1514,13 +1514,15 @@ phase_vt27() {
   edge_end
   n="$(grep -c . "$out.jsonl")" || true
   [ "$n" = 20 ] || driver_fail "VT-27 $shape: $n attempts recorded"
-  # The driver itself: the ClientHello went out in the intended shape.
+  # The driver itself: the ClientHello went out in the intended shape. A
+  # connection the server closes partway shows a prefix of the plan.
   case "$shape" in
-    records) jq -se 'all(.[]; .records >= 3)' "$out.jsonl" >/dev/null ;;
-    segments) jq -se 'all(.[]; (.sent | length) == 4 and .gaps[0] >= 0.1 and .gaps[1] >= 0.2 and .gaps[2] >= 0.3)' \
-      "$out.jsonl" >/dev/null ;;
-    large) jq -se 'all(.[]; (.groups | index("X25519MLKEM768")) != null and (.sent | length) == 1)' \
-      "$out.jsonl" >/dev/null ;;
+    records) jq -se 'all(.[]; .records >= 3 and .sent == .planned)' "$out.jsonl" >/dev/null ;;
+    segments) jq -se 'all(.[]; (.planned | length) == 4 and (.sent | length) >= 1
+        and .sent == .planned[0:(.sent | length)] and ((.sent | length) == 4 or has("error"))
+        and ([.gaps, [0.1, 0.2, 0.3]] | transpose | all(.[0] == null or .[0] >= .[1])))' "$out.jsonl" >/dev/null ;;
+    large) jq -se 'all(.[]; (.groups | index("X25519MLKEM768")) != null and .sent == .planned
+        and (.planned | length) == 1)' "$out.jsonl" >/dev/null ;;
   esac || driver_fail "VT-27 $shape: the ClientHello was not sent in that shape"
   ok="$(jq -s '[.[] | select(.ok)] | length' "$out.jsonl")"
   direct="$(grep -cF "[$fwd -> direct]" "$out-access.txt")" || true
@@ -1529,7 +1531,9 @@ phase_vt27() {
     "$out-standin.jsonl")"
   syn="$(grep -c . "$out-syn.txt")" || true
   printf '%s\n' "$shape: client got the body $ok of $n" "forwarder to direct $direct, to blocked $blocked" \
-    "stand-in served $served, SYN to the stand-in $syn" >"$out.txt"
+    "stand-in served $served, SYN to the stand-in $syn" \
+    "pieces sent of $(jq -s '.[0].planned | length' "$out.jsonl"): $(jq -rs '[.[] | .sent | length] | group_by(.)
+      | map("\(.[0]) in \(length)") | join(", ")' "$out.jsonl")" >"$out.txt"
   { [ "$ok" = 20 ] && [ "$direct" -ge 20 ] && [ "$blocked" = 0 ] && [ "$served" -ge 20 ] && [ "$syn" -ge 20 ]; } ||
     fail "VT-27 $shape: not every connection was forwarded ($(paste -sd ';' "$out.txt"))"
 }
