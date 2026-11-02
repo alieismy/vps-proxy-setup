@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck source-path=SCRIPTDIR
 # Guest side of the M2 VM tests (detailed design 9, 19; verification plan
-# VT-10 to VT-13, VT-15 to VT-18, VT-20 to VT-29, VT-70, VT-71). Sources
+# VT-10 to VT-13, VT-15 to VT-18, VT-20 to VT-31, VT-70, VT-71). Sources
 # tests/guest/m1.sh for its helpers and the phases of the main configuration; tests/vm.py runs one phase per SSH session. The
 # guest is the main configuration with the namespaces, the stand-in and a
 # fresh target-check result of the m1 phase network and the phase m2-prep.
@@ -1630,6 +1630,86 @@ phase_vt29() {
     { grep -qx 'protocol=TLSv1.3' "$phase_dir/vt29-$d.txt" && grep -qx 'http_status=200' "$phase_dir/vt29-$d.txt"; } ||
       fail "VT-29: the $d side could not be measured"
   done
+}
+
+# VT-30 and VT-31 (D22): a domain in the bundled geosite:cn and an IPv4
+# address in the bundled geoip:cn. Both are in the upstream lists the release
+# bundles; that the bundled copies hold them is what VT-30 shows.
+readonly CN_DOMAIN=www.baidu.com
+readonly CN_IPV4=223.5.5.5
+
+# route_test CASE INBOUND_TAG FIELD VALUE: one query to the panel's route test
+# (POST panel/api/xray/routeTest, detailed design 19), which asks the running
+# core which outbound it would pick, without sending traffic. FIELD is domain
+# or ip. The answer goes to vt30.jsonl.
+route_test() {
+  jq -rn --arg t "$2" --arg f "$3" --arg v "$4" '"\($f)=\($v | @uri)&port=443&network=tcp&inboundTag=\($t | @uri)"' \
+    >"$PRIVATE/route-test-form"
+  panel_api POST xray/routeTest "$PRIVATE/route-test-form" application/x-www-form-urlencoded
+  jq -c --arg c "$1" --arg f "$3" --arg v "$4" '{case: $c, query: "\($f) \($v)", matched: .obj.matched,
+    outboundTag: .obj.outboundTag}' "$PANEL_OUT" >>"$phase_dir/vt30.jsonl"
+}
+
+# route_is CASE MATCHED TAG: the answer of that case.
+route_is() {
+  jq -se --arg c "$1" --argjson m "$2" --arg t "$3" '[.[] | select(.case == $c)]
+    | length == 1 and .[0].matched == $m and .[0].outboundTag == $t' "$phase_dir/vt30.jsonl" >/dev/null
+}
+
+# VT-30: from the REALITY inbound, the geosite:cn domain and the geoip:cn
+# literal go to blocked (rules 3 and 4); the control probe.example either
+# matches a rule to direct, or matches none and takes the first outbound of
+# the generated config, which must be direct. From the forwarder,
+# target.example goes to direct and other.example to blocked (rules 1 and 2).
+phase_vt30() {
+  local reality fwd
+  reality="$(xray_tag 443)"
+  fwd="$(xray_tag 20443)"
+  panel_login
+  rm -f "$phase_dir/vt30.jsonl"
+  route_test cn-domain "$reality" domain "$CN_DOMAIN"
+  route_test cn-ipv4 "$reality" ip "$CN_IPV4"
+  route_test control "$reality" domain probe.example
+  route_test forwarder-target "$fwd" domain target.example
+  route_test forwarder-other "$fwd" domain other.example
+  jq -r '"\(.case) (\(.query)): matched \(.matched), outbound \(if .outboundTag == "" then "none" else .outboundTag end)"' \
+    "$phase_dir/vt30.jsonl" >"$phase_dir/vt30.txt"
+  printf 'first outbound of the generated config: %s\n' "$(jq -r '.outbounds[0].tag' "$XRAY_CONFIG")" \
+    >>"$phase_dir/vt30.txt"
+  route_is cn-domain true blocked || fail "VT-30: $CN_DOMAIN from the REALITY inbound is not routed to blocked"
+  route_is cn-ipv4 true blocked || fail "VT-30: $CN_IPV4 from the REALITY inbound is not routed to blocked"
+  { route_is control true direct ||
+    { route_is control false '' && jq -e '.outbounds[0].tag == "direct"' "$XRAY_CONFIG" >/dev/null; }; } ||
+    fail 'VT-30: probe.example from the REALITY inbound would not go to direct'
+  route_is forwarder-target true direct || fail 'VT-30: target.example from the forwarder is not routed to direct'
+  route_is forwarder-other true blocked || fail 'VT-30: other.example from the forwarder is not routed to blocked'
+}
+
+# VT-31: Mihomo in global mode over the node, as in VT-20. The geosite:cn
+# domain fails, routed from the REALITY inbound to blocked by a rule;
+# probe.example gets through, to direct.
+phase_vt31() {
+  local reality
+  reality="$(xray_tag 443)"
+  mihomo_up main 7890
+  edge_begin vt31
+  client_curl vt31-cn -x http://127.0.0.1:7890 "https://$CN_DOMAIN/"
+  local cn_rc="$CURL_RC" cn_code="$CURL_HTTP"
+  client_curl vt31-probe -x http://127.0.0.1:7890 http://probe.example/
+  edge_end
+  mihomo_log main
+  printf '%s\n' "$CN_DOMAIN: curl exit $cn_rc, HTTP $cn_code" "probe.example: curl exit $CURL_RC, HTTP $CURL_HTTP" \
+    >"$phase_dir/vt31.txt"
+  { [ "$cn_rc" != 0 ] || [ "$cn_code" != 200 ]; } || fail "VT-31: $CN_DOMAIN was reached over the node"
+  grep -qF "accepted tcp:$CN_DOMAIN:443 [$reality -> blocked]" "$phase_dir/vt31-access.txt" ||
+    fail "VT-31: the access log does not show $CN_DOMAIN routed from the REALITY inbound to blocked"
+  [ "$(grep -cF "tcp:$CN_DOMAIN:" "$phase_dir/vt31-access.txt")" = \
+    "$(grep -cF "tcp:$CN_DOMAIN:443 [$reality -> blocked]" "$phase_dir/vt31-access.txt")" ] ||
+    fail "VT-31: $CN_DOMAIN was also routed elsewhere"
+  { [ "$CURL_RC" = 0 ] && [ "$CURL_HTTP" = 200 ] && grep -qx 'stand-in probe.example' "$phase_dir/vt31-probe.body"; } ||
+    fail 'VT-31: http://probe.example/ over the node failed'
+  grep -qF "accepted tcp:probe.example:80 [$reality >> direct]" "$phase_dir/vt31-access.txt" ||
+    fail 'VT-31: the access log does not show probe.example from the REALITY inbound to direct'
 }
 
 main "$@"

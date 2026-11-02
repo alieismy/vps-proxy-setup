@@ -19,6 +19,8 @@ domain openai.com
 domain chatgpt.com
 domain anthropic.com
 domain claude.ai
+# A site in the bundled geosite:cn, the routing test vector of VT-30 and VT-31.
+domain baidu.com
 
 # IPv4 blocks the node_ip validation rejects (detailed design 2.4).
 cidr 0.0.0.0/8 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
@@ -33,3 +35,6 @@ cidr 240.0.0.0/4 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
 # IPv6 unique local addresses, excluded from usable IPv6 egress addresses
 # (detailed design 4.2 ipv6.egress).
 cidr fc00::/7 lib/vps-proxy-setup/probe.sh docs/detailed-design.md
+# A public resolver address in the bundled geoip:cn, the routing test vector
+# of VT-30; a constant, not a deployment address.
+cidr 223.5.5.5 tests/guest/m2.sh docs/detailed-design.md
