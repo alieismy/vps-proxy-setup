@@ -4,7 +4,7 @@ Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example.
 
 在已经用 [vps-hardening](https://github.com/alieismy/vps-hardening) 加固的 Debian/Ubuntu VPS 上搭建代理服务，以 3X-UI 为例。
 
-**当前状态：[需求规格说明](docs/requirements.md) v1.6 已批准，[方案设计](docs/solution-design.md) v1.5 已批准，[验证计划](docs/verification-plan.md) v1.4 已批准，[详细设计](docs/detailed-design.md) v1.1（v1.0 已批准，按 M1 的运行证据补的一行读取前提和规则位置的改正已确认），各契约按里程碑实现和验证。M1 已实现并在虚拟机测试中通过：`deploy` 只做预检，另有 `check`、`target-check` 和 `install.sh`；部署从 M2 开始。还没有发行版，因此还不能安装。**
+**当前状态：[需求规格说明](docs/requirements.md) v1.6 已批准，[方案设计](docs/solution-design.md) v1.6 已批准，[验证计划](docs/verification-plan.md) v1.4 已批准，[详细设计](docs/detailed-design.md) v1.1（v1.0 已批准，按 M1 的运行证据补的一行读取前提和规则位置的改正已确认），各契约按里程碑实现和验证。M1 已实现并在虚拟机测试中通过：`deploy` 只做预检，另有 `check`、`target-check` 和 `install.sh`；部署从 M2 开始。还没有发行版，因此还不能安装。**
 
 ## 与另外两个仓库的关系
 
