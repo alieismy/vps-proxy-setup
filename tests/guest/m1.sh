@@ -645,7 +645,7 @@ make_test_ca() {
     -addext 'keyUsage=critical,keyCertSign,cRLSign' -keyout "$CA_DIR/ca.key" -out "$CA_DIR/ca.crt" 2>/dev/null
   openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj '/CN=target.example' \
     -keyout "$CA_DIR/leaf.key" -out "$CA_DIR/leaf.csr" 2>/dev/null
-  printf '%s\n' 'subjectAltName=DNS:target.example,DNS:other.example' 'extendedKeyUsage=serverAuth' \
+  printf '%s\n' 'subjectAltName=DNS:target.example,DNS:other.example,DNS:probe.example' 'extendedKeyUsage=serverAuth' \
     'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature' >"$CA_DIR/leaf.ext"
   openssl x509 -req -in "$CA_DIR/leaf.csr" -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/ca.key" -CAcreateserial -days 3 \
     -extfile "$CA_DIR/leaf.ext" -out "$CA_DIR/leaf.crt" 2>/dev/null

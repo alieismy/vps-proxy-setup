@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Target stand-in for the M1 VM tests (detailed design 9.2).
+"""Target stand-in for the VM tests (detailed design 9.2).
 
-Serves target.example and other.example with TLS 1.3, h2 and HTTP/1.1 from
-one certificate of the per-run test CA, each host with its own fixed body.
+Serves target.example, other.example and probe.example with TLS 1.3, h2 and
+HTTP/1.1 from one certificate of the per-run test CA, each host with its own
+fixed body; and the same hosts in plain HTTP/1.1 on --http-port, routed by
+Host (probe.example over the proxy from M2, verification plan 3.6).
 --mode strict routes by SNI and ignores Host and :authority; --mode cross
 routes by Host or :authority, as a server that mixes virtual hosts would, so
 that the cross-authority probes of target-check have something to find
@@ -37,6 +39,7 @@ import h2.exceptions
 BODIES = {
     'target.example': b'stand-in target.example\n',
     'other.example': b'stand-in other.example\n',
+    'probe.example': b'stand-in probe.example\n',
 }
 REASONS = {200: 'OK', 404: 'Not Found'}
 PREFIX = 4 << 20  # VPS_BODY_MAX in lib/vps-proxy-setup/target.sh
@@ -81,8 +84,8 @@ class StandIn:
             with self.log_lock, open(self.arrivals, 'a', encoding='utf-8') as f:
                 f.write(f'{time.time():.3f} {proto}\n')
 
-    def route(self, sni, host):
-        name = sni if self.mode == 'strict' else (host or '').rsplit(':', 1)[0].lower()
+    def route(self, sni, host, plain=False):
+        name = sni if self.mode == 'strict' and not plain else (host or '').rsplit(':', 1)[0].lower()
         body = self.bodies.get(name or '')
         return (200, body) if body else (404, b'not found\n')
 
@@ -119,7 +122,7 @@ class StandIn:
             key, _, value = line.partition(':')
             headers[key.strip().lower()] = value.strip()
         host = headers.get('host', '')
-        status, body = self.route(sni, host)
+        status, body = self.route(sni, host, record.get('plain', False))
         self.arrived('http/1.1')
         time.sleep(self.delay)
         # Logged before the body: a client that stops reading ends the send.
@@ -170,7 +173,7 @@ class StandIn:
             if out:
                 conn.sendall(out)
 
-    def serve(self, raw, peer):
+    def serve(self, raw, peer, plain=False):
         record = {'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'mode': self.mode,
                   'peer': f'{peer[0]}:{peer[1]}', 'requests': []}
         if self.large:
@@ -178,6 +181,10 @@ class StandIn:
         conn = None
         try:
             raw.settimeout(20)
+            if plain:
+                record.update(plain=True, sni=None, port=raw.getsockname()[1])
+                self.http1(raw, None, record)
+                return
             conn = self.ctx.wrap_socket(raw, server_side=True, do_handshake_on_connect=False)
             conn.do_handshake()
             with self.sni_lock:
@@ -207,16 +214,23 @@ def main():
     parser.add_argument('--arrivals', help='file that gets a line as each request arrives')
     parser.add_argument('--listen', default='198.51.100.2')
     parser.add_argument('--port', type=int, default=443)
+    parser.add_argument('--http-port', type=int, default=80, help='plain HTTP/1.1, routed by Host')
     parser.add_argument('--cert', required=True, help='leaf certificate followed by the test CA')
     parser.add_argument('--key', required=True)
     parser.add_argument('--log', required=True)
     args = parser.parse_args()
     server = StandIn(args)
-    with socket.create_server((args.listen, args.port), backlog=64) as sock:
+    plain = socket.create_server((args.listen, args.http_port), backlog=64)
+    with socket.create_server((args.listen, args.port), backlog=64) as sock, plain:
         server.log({'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'mode': args.mode, 'event': 'start'})
-        while True:
-            raw, peer = sock.accept()
-            threading.Thread(target=server.serve, args=(raw, peer), daemon=True).start()
+
+        def accept(listener, is_plain):
+            while True:
+                raw, peer = listener.accept()
+                threading.Thread(target=server.serve, args=(raw, peer, is_plain), daemon=True).start()
+
+        threading.Thread(target=accept, args=(plain, True), daemon=True).start()
+        accept(sock, False)
 
 
 if __name__ == '__main__':

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck source-path=SCRIPTDIR
 # Guest side of the M2 VM tests (detailed design 9, 19; verification plan
-# VT-10 to VT-13, VT-15 to VT-18, VT-70, VT-71). Sources tests/guest/m1.sh for its helpers and the phases of
-# the main configuration; tests/vm.py runs one phase per SSH session. The
+# VT-10 to VT-13, VT-15 to VT-18, VT-20 to VT-26, VT-70, VT-71). Sources
+# tests/guest/m1.sh for its helpers and the phases of the main configuration; tests/vm.py runs one phase per SSH session. The
 # guest is the main configuration with the namespaces, the stand-in and a
 # fresh target-check result of the m1 phase network and the phase m2-prep.
 
@@ -1128,6 +1128,365 @@ phase_vt71() {
   collect_markers
   m2_check check
   scan_markers
+}
+
+# ---------------------------------------------------------------------------
+# REALITY and the forwarding boundary: VT-20 to VT-26 (detailed design 9.7,
+# 17; verification plan 3.3, 3.6, 4.4). The probes come from the client
+# namespace to the node address on 443.
+
+readonly MIHOMO_GZ="$FIXTURES/mihomo-linux-amd64-compatible-v1.19.33.gz"
+readonly MIHOMO=/opt/vps-mihomo/mihomo
+readonly XRAY_ACCESS=/var/log/x-ui/access.log
+readonly NODE_IP=192.0.2.1
+readonly SUB_PORT=2096
+# The test exception of verification plan 3.6: the direct outbound lets the
+# stand-in through, ahead of the template's geoip:private block.
+readonly STANDIN_RULE='{"action":"allow","ip":["198.51.100.2"]}'
+
+phase_sni_deploy() {
+  settle
+  keeper_start
+  deploy_yes sni-deploy "$TOOL" deploy --input "$M2_INPUT"
+  keeper_stop
+  collect_markers
+  expect_rc sni-deploy 1
+  expect_clean sni-deploy
+  expect_err sni-deploy '[x] 第 1～7 步完成'
+  expect_fails sni-deploy
+  expect_no_secret sni-deploy
+  wait_xui_stable
+  scan_markers
+}
+
+# xray_tag PORT: the tag of the inbound on PORT in the generated config.
+xray_tag() {
+  jq -r --argjson p "$1" '[.inbounds[] | select(.port == $p) | .tag] | if length == 1 then .[0] else "" end' \
+    "$XRAY_CONFIG"
+}
+
+# sub_get EMAIL FIELD OUT: the user's subscription at the handoff address
+# (subscriptionUrl or mihomoUrl), fetched on loopback with the subscription
+# host as Host, as deploy step 7 does. The address reaches curl on stdin.
+sub_get() {
+  local url code
+  url="$(jq -r --arg e "$1" --arg f "$2" '.users[] | select(.email == $e) | .[$f]' "$HANDOFF")"
+  [[ "$url" =~ ^https://([a-z0-9.-]+)(/[A-Za-z0-9/_-]+)$ ]] || driver_fail "$2 of $1 is not in the expected form"
+  code="$({
+    printf 'url = "http://127.0.0.1:%s%s"\n' "$SUB_PORT" "${BASH_REMATCH[2]}"
+    printf 'header = "Host: %s"\n' "${BASH_REMATCH[1]}"
+  } | curl -q --silent --noproxy '*' --proto '=http' --max-time 30 -o "$3" -w '%{http_code}' -K -)" || code=000
+  [ "$code" = 200 ] || driver_fail "$2 of $1: HTTP $code"
+}
+
+# mihomo_up NAME PORT [drop-mlkem]: Mihomo in the client namespace with the
+# proxies of alice's Mihomo subscription as they are (without
+# support-x25519mlkem768 for drop-mlkem), in global mode with GLOBAL set to
+# her node, so that no client rule decides the outcome (verification plan
+# 3.6). Mixed port PORT, controller PORT+2000, both on loopback of the
+# namespace. The configuration holds her UUID, so it stays private.
+mihomo_up() {
+  local name="$1" port="$2" dir="$PRIVATE/mihomo-$1" unit="vps-mihomo-$1" i code
+  rm -rf "$dir"
+  install -d -m 0700 "$dir"
+  sub_get alice mihomoUrl "$dir/subscription.yaml"
+  python3 - "$dir" "$port" "${3-}" <<'PY' || driver_fail "mihomo $name: no configuration from the subscription"
+import json, os, sys
+import yaml
+
+d, port, mode = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+with open(os.path.join(d, 'subscription.yaml'), encoding='utf-8') as f:
+    proxies = yaml.safe_load(f)['proxies']
+assert len(proxies) == 1, 'not one proxy'
+if mode == 'drop-mlkem':
+    proxies[0].get('reality-opts', {}).pop('support-x25519mlkem768', None)
+conf = {'mixed-port': port, 'allow-lan': False, 'mode': 'global', 'log-level': 'info', 'ipv6': False,
+        'external-controller': f'127.0.0.1:{port + 2000}', 'profile': {'store-selected': False},
+        'proxies': proxies, 'rules': []}
+fd = os.open(os.path.join(d, 'config.yaml'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w', encoding='utf-8') as f:
+    yaml.safe_dump(conf, f, allow_unicode=True, sort_keys=False)
+with open(os.path.join(d, 'select.json'), 'w', encoding='utf-8') as f:
+    json.dump({'name': proxies[0]['name']}, f, ensure_ascii=False)
+PY
+  systemctl stop "$unit" 2>/dev/null || true
+  systemctl reset-failed "$unit" 2>/dev/null || true
+  systemd-run --quiet --unit "$unit" -- ip netns exec vpsns-client "$MIHOMO" -d "$dir"
+  for i in $(seq 50); do
+    [ -z "$(ip netns exec vpsns-client ss -Hltn "sport = :$((port + 2000))")" ] || break
+    [ "$i" -lt 50 ] || driver_fail "mihomo $name did not start"
+    sleep 0.3
+  done
+  code="$(ip netns exec vpsns-client curl -q -s -o /dev/null -w '%{http_code}' -X PUT \
+    -H 'Content-Type: application/json' --data-binary "@$dir/select.json" \
+    "http://127.0.0.1:$((port + 2000))/proxies/GLOBAL")" || code=000
+  [ "$code" = 204 ] || driver_fail "mihomo $name: selecting the node in GLOBAL gave HTTP $code"
+  ip netns exec vpsns-client curl -q -s "http://127.0.0.1:$((port + 2000))/proxies/GLOBAL" |
+    jq -e --slurpfile s "$dir/select.json" '.now == $s[0].name' >/dev/null ||
+    driver_fail "mihomo $name: GLOBAL is not the node"
+}
+
+# mihomo_log NAME: Mihomo's log lines (no UUID or key: it names the node and
+# the server address) for the evidence.
+mihomo_log() {
+  journalctl -q -o cat -u "vps-mihomo-$1" >"$phase_dir/mihomo-$1.log" 2>&1 || true
+}
+
+# client_curl NAME [CURL_ARGS...]: curl in the client namespace. The body goes
+# to NAME.body, curl's stderr to NAME.err; sets CURL_RC and CURL_HTTP.
+CURL_RC=0
+CURL_HTTP=000
+client_curl() {
+  local name="$1"
+  shift
+  CURL_RC=0
+  CURL_HTTP="$(ip netns exec vpsns-client curl -q -sS --max-time 20 -o "$phase_dir/$name.body" \
+    -w '%{http_code}' "$@" 2>"$phase_dir/$name.err")" || CURL_RC=$?
+  printf 'curl exit %s, HTTP %s\n' "$CURL_RC" "${CURL_HTTP:=000}" >"$phase_dir/$name.result"
+}
+
+# edge_begin NAME / edge_end: the three places of verification plan 4.4 around
+# one case: the new lines of the Xray access log and of the stand-in's
+# connection log, and the SYNs to the stand-in on the guest's veth towards it.
+EDGE_NAME=''
+EDGE_PID=''
+EDGE_ACCESS=0
+EDGE_STANDIN=0
+edge_begin() {
+  EDGE_NAME="$1"
+  EDGE_ACCESS="$(stat -c %s "$XRAY_ACCESS")"
+  EDGE_STANDIN="$(stat -c %s "$EVIDENCE/standin/connections.jsonl")"
+  tcpdump -Z root -i vps-standin0 -nn -U -w "$PRIVATE/edge-$1.pcap" "tcp and host $STANDIN" \
+    2>"$PRIVATE/edge-$1.err" &
+  EDGE_PID=$!
+  for _ in $(seq 50); do
+    ! grep -q 'listening on' "$PRIVATE/edge-$1.err" || return 0
+    sleep 0.2
+  done
+  driver_fail 'tcpdump did not start'
+}
+
+edge_end() {
+  local n="$EDGE_NAME"
+  # The access log is written as each connection is routed; the stand-in logs
+  # a connection when it ends.
+  sleep 3
+  kill -INT "$EDGE_PID"
+  wait "$EDGE_PID" || true
+  [ "$(stat -c %s "$XRAY_ACCESS")" -ge "$EDGE_ACCESS" ] || driver_fail "$n: the access log shrank during the case"
+  tail -c "+$((EDGE_ACCESS + 1))" "$XRAY_ACCESS" >"$phase_dir/$n-access.txt"
+  tail -c "+$((EDGE_STANDIN + 1))" "$EVIDENCE/standin/connections.jsonl" | grep -v '"event"' \
+    >"$phase_dir/$n-standin.jsonl" || true
+  tcpdump -nn -tt -r "$PRIVATE/edge-$n.pcap" \
+    "tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn and dst host $STANDIN" >"$phase_dir/$n-syn.txt" 2>/dev/null
+  printf 'access log %s lines, stand-in %s connections, %s SYN to the stand-in\n' \
+    "$(grep -c . "$phase_dir/$n-access.txt")" "$(grep -c . "$phase_dir/$n-standin.jsonl")" \
+    "$(grep -c . "$phase_dir/$n-syn.txt")" >"$phase_dir/$n-edge.txt"
+}
+
+# edge_blocked NAME: the connection did not cross the boundary. The forwarder
+# routed it to blocked, the stand-in has no connection, and no SYN went to
+# the stand-in. A client that got nothing is not enough (FR-02).
+edge_blocked() {
+  local fwd
+  fwd="$(xray_tag 20443)"
+  grep -qF "[$fwd -> blocked]" "$phase_dir/$1-access.txt" ||
+    fail "$1: the access log has no forwarder connection routed to blocked"
+  ! grep -qF "[$fwd -> direct]" "$phase_dir/$1-access.txt" || fail "$1: the forwarder routed a connection to direct"
+  [ ! -s "$phase_dir/$1-standin.jsonl" ] || fail "$1: the stand-in got a connection"
+  [ ! -s "$phase_dir/$1-syn.txt" ] || fail "$1: a SYN went to the stand-in"
+}
+
+# The test-environment deviations, through the panel with
+# the handoff credentials (verification plan 3.4): the stand-in exception in
+# the direct outbound (3.6) and the Xray access log (4.4). Saving the template
+# restarts Xray.
+phase_sni_prep() {
+  local fwd reality
+  grep -qE '^443/tcp +ALLOW' <(ufw status) || fail 'UFW does not allow 443/tcp'
+  panel_login
+  template_edit '.log.access = "'"$XRAY_ACCESS"'"
+    | .outbounds |= map(if .tag == "direct" then .settings.finalRules = ['"$STANDIN_RULE"'] + .settings.finalRules
+      else . end)'
+  wait_port 443 exposed
+  wait_port 20443 loopback
+  wait_xui_stable
+  for _ in $(seq 60); do
+    [ ! -e "$XRAY_ACCESS" ] || break
+    sleep 1
+  done
+  jq -e --arg a "$XRAY_ACCESS" --argjson r "$STANDIN_RULE" '.log.access == $a
+    and ([.outbounds[] | select(.tag == "direct") | .settings.finalRules[0]] == [$r])' "$XRAY_CONFIG" >/dev/null ||
+    fail 'the generated Xray config does not have the access log and the stand-in exception'
+  [ -f "$XRAY_ACCESS" ] || fail "Xray did not create $XRAY_ACCESS"
+  reality="$(xray_tag 443)"
+  fwd="$(xray_tag 20443)"
+  [ -n "$reality" ] && [ -n "$fwd" ] || fail 'no single inbound on 443 and on 20443'
+  printf '%s\n' "REALITY inbound tag: $reality" "forwarder tag: $fwd" \
+    'deviation: the direct outbound lets 198.51.100.2 through first (verification plan 3.6)' \
+    "deviation: the Xray access log is on at $XRAY_ACCESS (verification plan 4.4)" \
+    'deviation: UFW allows 443/tcp, added with vps-hardening ports (verification plan 3.3)' \
+    'deviation: Mihomo runs in global mode with only the proxy of the subscription (verification plan 3.6)' \
+    >"$phase_dir/deviations.txt"
+  fixture_check
+  install -d -m 0755 "${MIHOMO%/*}"
+  gunzip -c "$MIHOMO_GZ" >"$MIHOMO.tmp"
+  chmod 0755 "$MIHOMO.tmp"
+  mv -f "$MIHOMO.tmp" "$MIHOMO"
+  "$MIHOMO" -v >"$phase_dir/mihomo-version.txt"
+  python3 -c 'import yaml' || fail 'python3-yaml is missing'
+  capture client-443 ip netns exec vpsns-client timeout 5 bash -c "exec 3<>/dev/tcp/$NODE_IP/443"
+  expect_rc client-443 0
+}
+
+# VT-20: alice's Mihomo subscription carries Vision, the chrome fingerprint and
+# ML-KEM; with it as is, Mihomo reaches probe.example over the node, in HTTP
+# and HTTPS, routed to direct from the REALITY inbound.
+phase_vt20() {
+  local reality
+  reality="$(xray_tag 443)"
+  mihomo_up main 7890
+  python3 - "$PRIVATE/mihomo-main/subscription.yaml" "$NODE_IP" >"$phase_dir/vt20-proxy.json" <<'PY' ||
+import json, sys
+import yaml
+
+with open(sys.argv[1], encoding='utf-8') as f:
+    p = yaml.safe_load(f)['proxies'][0]
+ro = p.get('reality-opts') or {}
+summary = {k: p.get(k) for k in ('type', 'server', 'port', 'network', 'tls', 'flow', 'client-fingerprint',
+                                 'servername')}
+summary['reality-opts keys'] = sorted(ro)
+summary['support-x25519mlkem768'] = ro.get('support-x25519mlkem768')
+print(json.dumps(summary, ensure_ascii=False, indent=2))
+ok = (p.get('type') == 'vless' and p.get('server') == sys.argv[2] and p.get('port') == 443
+      and p.get('flow') == 'xtls-rprx-vision' and p.get('client-fingerprint') == 'chrome'
+      and p.get('servername') == 'target.example' and ro.get('support-x25519mlkem768') is True
+      and {'public-key', 'short-id'} <= set(ro))
+sys.exit(0 if ok else 1)
+PY
+    fail 'VT-20: the proxy of the Mihomo subscription is not as expected'
+  edge_begin vt20
+  client_curl vt20-http -x http://127.0.0.1:7890 http://probe.example/
+  local http_rc="$CURL_RC" http_code="$CURL_HTTP"
+  client_curl vt20-https -x http://127.0.0.1:7890 https://probe.example/
+  edge_end
+  mihomo_log main
+  { [ "$http_rc" = 0 ] && [ "$http_code" = 200 ] && grep -qx 'stand-in probe.example' "$phase_dir/vt20-http.body"; } ||
+    fail 'VT-20: http://probe.example/ over the node failed'
+  { [ "$CURL_RC" = 0 ] && [ "$CURL_HTTP" = 200 ] &&
+    grep -qx 'stand-in probe.example' "$phase_dir/vt20-https.body"; } ||
+    fail 'VT-20: https://probe.example/ over the node failed'
+  { grep -qF "accepted tcp:probe.example:80 [$reality >> direct]" "$phase_dir/vt20-access.txt" &&
+    grep -qF "accepted tcp:probe.example:443 [$reality >> direct]" "$phase_dir/vt20-access.txt"; } ||
+    fail 'VT-20: the access log does not show both requests from the REALITY inbound to direct'
+  jq -se 'any(.[]; .plain == true and any(.requests[]; .host == "probe.example" and .status == 200))
+    and any(.[]; .sni == "probe.example" and any(.requests[]; .status == 200))' \
+    "$phase_dir/vt20-standin.jsonl" >/dev/null || fail 'VT-20: the stand-in did not serve probe.example twice'
+}
+
+# VT-21: the same proxy without support-x25519mlkem768 does not get through
+# (an upstream behaviour, a negative case).
+phase_vt21() {
+  mihomo_up no-mlkem 7891 drop-mlkem
+  edge_begin vt21
+  client_curl vt21-http -x http://127.0.0.1:7891 http://probe.example/
+  edge_end
+  mihomo_log no-mlkem
+  systemctl stop vps-mihomo-no-mlkem 2>/dev/null || true
+  ! grep -qx 'stand-in probe.example' "$phase_dir/vt21-http.body" 2>/dev/null ||
+    fail 'VT-21: probe.example was reached without support-x25519mlkem768'
+  ! jq -se 'any(.[]; any(.requests[]; .host == "probe.example"))' "$phase_dir/vt21-standin.jsonl" >/dev/null ||
+    fail 'VT-21: the stand-in served probe.example'
+}
+
+# VT-22: the node of the subscriptions is the input IPv4 address, and its name
+# is the inbound remark, compared as UTF-8 bytes.
+phase_vt22() {
+  sub_get alice mihomoUrl "$PRIVATE/vt22-mihomo.yaml"
+  sub_get alice subscriptionUrl "$PRIVATE/vt22-plain.txt"
+  python3 - "$PRIVATE/vt22-mihomo.yaml" "$PRIVATE/vt22-plain.txt" "$NODE_IP" "$REMARK_JP" \
+    >"$phase_dir/vt22.txt" <<'PY' || fail 'VT-22: the node address or name is not as expected'
+import base64, os, re, sys, urllib.parse
+import yaml
+
+mihomo, plain, node = sys.argv[1], sys.argv[2], sys.argv[3]
+remark = os.fsencode(sys.argv[4])
+with open(mihomo, encoding='utf-8') as f:
+    proxies = yaml.safe_load(f)['proxies']
+with open(plain, 'rb') as f:
+    links = [l for l in base64.b64decode(b''.join(f.read().split())).decode().splitlines() if l.startswith('vless://')]
+m = re.match(r'^vless://[^@]+@([^:/?#]+):([0-9]+)\?[^#]*#(.*)$', links[0]) if len(links) == 1 else None
+results = {
+    'mihomo: one proxy': len(proxies) == 1,
+    'mihomo: server is the node IPv4': len(proxies) == 1 and proxies[0].get('server') == node,
+    'mihomo: name is the remark (UTF-8 bytes)': len(proxies) == 1 and proxies[0].get('name', '').encode() == remark,
+    'plain: one VLESS link': m is not None,
+    'plain: host is the node IPv4': m is not None and m.group(1) == node,
+    'plain: name is the remark (UTF-8 bytes)': m is not None and urllib.parse.unquote_to_bytes(m.group(3)) == remark,
+}
+for k, v in results.items():
+    print(('PASS ' if v else 'FAIL ') + k)
+sys.exit(0 if all(results.values()) else 1)
+PY
+}
+
+# VT-23: other.example as SNI does not reach the stand-in.
+phase_vt23() {
+  edge_begin vt23
+  client_curl vt23 --resolve "other.example:443:$NODE_IP" https://other.example/
+  edge_end
+  ! grep -q 'stand-in' "$phase_dir/vt23.body" 2>/dev/null || fail 'VT-23: the client got stand-in content'
+  grep -qF 'tcp:other.example:443' "$phase_dir/vt23-access.txt" || fail 'VT-23: the forwarder did not see other.example'
+  edge_blocked vt23
+}
+
+# VT-24: a ClientHello without SNI.
+phase_vt24() {
+  edge_begin vt24
+  ip netns exec vpsns-client timeout 15 openssl s_client -connect "$NODE_IP:443" -noservername \
+    </dev/null >"$phase_dir/vt24.out" 2>&1 || true
+  edge_end
+  ! grep -q 'vps-proxy-setup test CA' "$phase_dir/vt24.out" || fail 'VT-24: the client got the stand-in certificate'
+  edge_blocked vt24
+}
+
+# VT-25: input that is not TLS: plain HTTP with Host target.example, which
+# shows that destOverride has only tls; and random bytes.
+phase_vt25() {
+  edge_begin vt25-http
+  ip netns exec vpsns-client timeout 10 bash -c "exec 3<>/dev/tcp/$NODE_IP/443 &&
+    printf 'GET / HTTP/1.1\r\nHost: target.example\r\nConnection: close\r\n\r\n' >&3 && cat <&3" \
+    >"$phase_dir/vt25-http.out" 2>&1 || true
+  edge_end
+  ! grep -q 'stand-in' "$phase_dir/vt25-http.out" || fail 'VT-25: plain HTTP got stand-in content'
+  edge_blocked vt25-http
+  edge_begin vt25-random
+  ip netns exec vpsns-client timeout 10 bash -c "exec 3<>/dev/tcp/$NODE_IP/443 && head -c 600 /dev/urandom >&3 &&
+    cat <&3" >/dev/null 2>&1 || true
+  edge_end
+  edge_blocked vt25-random
+}
+
+# VT-26: target.example as SNI with an ordinary ClientHello is forwarded: the
+# client gets the stand-in's certificate and content, and the stand-in has
+# the connection.
+phase_vt26() {
+  local fwd
+  fwd="$(xray_tag 20443)"
+  edge_begin vt26
+  client_curl vt26 --resolve "target.example:443:$NODE_IP" https://target.example/
+  ip netns exec vpsns-client timeout 15 openssl s_client -connect "$NODE_IP:443" -servername target.example \
+    </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer >"$phase_dir/vt26-cert.txt" 2>&1 || true
+  edge_end
+  { [ "$CURL_RC" = 0 ] && [ "$CURL_HTTP" = 200 ] && grep -qx 'stand-in target.example' "$phase_dir/vt26.body"; } ||
+    fail 'VT-26: the client did not get the stand-in content over a verified certificate'
+  grep -q 'issuer=CN *= *vps-proxy-setup test CA' "$phase_dir/vt26-cert.txt" ||
+    fail 'VT-26: the certificate is not the stand-in one'
+  grep -qF "accepted tcp:target.example:443 [$fwd -> direct]" "$phase_dir/vt26-access.txt" ||
+    fail 'VT-26: the access log does not show the forwarder routing target.example to direct'
+  jq -se 'any(.[]; .sni == "target.example" and any(.requests[]; .status == 200))' "$phase_dir/vt26-standin.jsonl" \
+    >/dev/null || fail 'VT-26: the stand-in has no served connection for target.example'
+  [ -s "$phase_dir/vt26-syn.txt" ] || fail 'VT-26: no SYN to the stand-in'
 }
 
 main "$@"

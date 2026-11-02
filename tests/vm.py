@@ -26,6 +26,9 @@ from a local asset directory. Suites:
                 target-check result: a complete deploy and check (VT-70);
                 then on overlays of it the baseline of M2 and one overlay per
                 VT-71 injection of M2, each judged here against the baseline.
+  m2-sni        one guest: a complete deploy, 443/tcp added with
+                vps-hardening ports and confirmed from a new session, the
+                test deviations, then VT-20 to VT-26 in turn.
 
 tests/guest/m1.sh is the guest side of M1 and judges everything except
 VT-71; tests/guest/m2.sh, which sources it, the guest side of M2.
@@ -57,6 +60,8 @@ GUEST_EVIDENCE = '/root/vps-evidence'
 GUEST_MARKERS = '/root/vps-private/markers'
 VH = '/usr/local/bin/vps-hardening'
 APPLY_PROMPT = '两项都满足请输入 yes'.encode()
+PORTS_APPLIED = '端口变更已生效，等待确认'
+PORTS_CONFIRMED = '已确认，端口变更生效'
 APPLIED = '加固已应用，等待确认'
 CONFIRMED = '已确认'
 
@@ -87,6 +92,17 @@ FIXTURES = {
     '3x-ui-install.sh': (
         f"https://raw.githubusercontent.com/MHSanaei/3x-ui/{PINS['VPS_PIN_XUI_COMMIT']}/install.sh",
         PINS['VPS_PIN_XUI_INSTALL_SHA256']),
+}
+# Further fixtures of one suite. Mihomo, the test client (VO-3): the newest
+# release, v1.19.33 of 2026-10-21; the build for amd64 without newer
+# instruction sets, digest from the release asset.
+SUITE_FIXTURES = {
+    'm2-sni': {
+        'mihomo-linux-amd64-compatible-v1.19.33.gz': (
+            'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/'
+            'mihomo-linux-amd64-compatible-v1.19.33.gz',
+            '386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6'),
+    },
 }
 # The M1 baseline of check on S1 (detailed design 9.5, with the items of
 # FR-13). An inferred expectation: a difference fails the run, and the
@@ -483,16 +499,17 @@ class Context:
         files = sorted([ROOT / 'install.sh'] + [
             p for d in ('bin', 'lib', 'tests/guest') for p in (ROOT / d).rglob('*')
             if p.is_file() and '__pycache__' not in p.parts])
+        pinned = dict(FIXTURES, **SUITE_FIXTURES.get(self.suite, {}))
         fixtures = {}
-        for name, (url, digest) in FIXTURES.items():
+        for name, (url, digest) in pinned.items():
             with urllib.request.urlopen(url, timeout=60) as response:
                 data = response.read()
             if sha256(data) != digest:
                 raise RuntimeError(f'{name}: checksum mismatch')
             fixtures[name] = data
-        fixtures['SHA256SUMS'] = ''.join(f'{FIXTURES[n][1]}  {n}\n' for n in sorted(FIXTURES)).encode()
+        fixtures['SHA256SUMS'] = ''.join(f'{pinned[n][1]}  {n}\n' for n in sorted(pinned)).encode()
         (self.evidence / 'fixtures.json').write_text(json.dumps(
-            {name: {'url': url, 'sha256': digest} for name, (url, digest) in FIXTURES.items()}, indent=2))
+            {name: {'url': url, 'sha256': digest} for name, (url, digest) in pinned.items()}, indent=2))
         with tarfile.open(path, 'w') as tar:
             def add(name, data, mode):
                 info = tarfile.TarInfo(name)
@@ -731,7 +748,27 @@ def m2_check(ctx, main):
                         expected)
 
 
-SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy, 'm2-check': m2_check}
+def m2_sni(ctx, main):
+    """VT-20 to VT-26 (detailed design 9.7): the guest judges each case. The
+    administrator's step of verification plan 3.3 opens 443/tcp, as the
+    main configuration applies vps-hardening: on a terminal, confirmed from a
+    new session."""
+    with Guest(ctx, 'sni', ctx.overlay(main, 'sni.qcow2')) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('sni-deploy', required=True, script='m2.sh')
+        status, output = guest.interactive('ports-add', f'{VH} ports --add 443/tcp')
+        ctx.require(status == 0 and PORTS_APPLIED in output, 'vps-hardening ports added 443/tcp')
+        status, output = guest.command('ports-confirm', f'{VH} confirm')
+        ctx.require(status == 0 and PORTS_CONFIRMED in output, 'the port change confirmed from a new root session')
+        guest.phase('sni-prep', required=True, script='m2.sh')
+        for name in ('vt20', 'vt21', 'vt22', 'vt23', 'vt24', 'vt25', 'vt26'):
+            guest.phase(name, script='m2.sh')
+        guest.poweroff()
+
+
+SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy, 'm2-check': m2_check,
+          'm2-sni': m2_sni}
 
 
 def main():
