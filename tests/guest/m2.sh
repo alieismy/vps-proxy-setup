@@ -1183,9 +1183,11 @@ sub_get() {
   [ "$code" = 200 ] || driver_fail "$2 of $1: HTTP $code"
 }
 
-# mihomo_up NAME PORT [drop-mlkem]: Mihomo in the client namespace with the
-# proxies of alice's Mihomo subscription as they are (without
-# support-x25519mlkem768 for drop-mlkem), in global mode with GLOBAL set to
+# mihomo_up NAME PORT [drop-mlkem | hosts JSON]: Mihomo in the client namespace
+# with the proxies of alice's Mihomo subscription as they are (without
+# support-x25519mlkem768 for drop-mlkem; with hosts, its own hosts table
+# JSON, name -> addresses, as a client resolves names with its own DNS), in
+# global mode with GLOBAL set to
 # her node, so that no client rule decides the outcome (verification plan
 # 3.6). Mixed port PORT, controller PORT+2000, both on loopback of the
 # namespace. The configuration holds her UUID, so it stays private.
@@ -1194,11 +1196,11 @@ mihomo_up() {
   rm -rf "$dir"
   install -d -m 0700 "$dir"
   sub_get alice mihomoUrl "$dir/subscription.yaml"
-  python3 - "$dir" "$port" "${3-}" <<'PY' || driver_fail "mihomo $name: no configuration from the subscription"
+  python3 - "$dir" "$port" "${3-}" "${4-}" <<'PY' || driver_fail "mihomo $name: no configuration from the subscription"
 import json, os, sys
 import yaml
 
-d, port, mode = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+d, port, mode, hosts = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
 with open(os.path.join(d, 'subscription.yaml'), encoding='utf-8') as f:
     proxies = yaml.safe_load(f)['proxies']
 assert len(proxies) == 1, 'not one proxy'
@@ -1207,6 +1209,8 @@ if mode == 'drop-mlkem':
 conf = {'mixed-port': port, 'allow-lan': False, 'mode': 'global', 'log-level': 'info', 'ipv6': False,
         'external-controller': f'127.0.0.1:{port + 2000}', 'profile': {'store-selected': False},
         'proxies': proxies, 'rules': []}
+if mode == 'hosts':
+    conf['hosts'] = json.loads(hosts)
 fd = os.open(os.path.join(d, 'config.yaml'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, 'w', encoding='utf-8') as f:
     yaml.safe_dump(conf, f, allow_unicode=True, sort_keys=False)
@@ -1853,9 +1857,11 @@ isolation_counts() {
 
 # fr13_begin NAME / fr13_end: edge_begin and edge_end for the dual-stack
 # stand-in: the new access log lines and stand-in records, and on the
-# guest's veth towards the stand-in the SYNs and UDP datagrams to each of its
-# two addresses. tcpdump's tcp[] does not reach into IPv6, so SYNs are taken
-# from the decoded flags.
+# guest's veth towards the stand-in the SYNs to the HTTP port and the UDP
+# datagrams to each of its two addresses. tcpdump's tcp[] does not reach into
+# IPv6, so SYNs are taken from the decoded flags. Every REALITY handshake
+# also makes the node reach its target, target.example on the stand-in's
+# IPv4 port 443, through the forwarder; those SYNs are counted apart.
 fr13_begin() {
   EDGE_NAME="$1"
   EDGE_ACCESS="$(stat -c %s "$XRAY_ACCESS")"
@@ -1882,14 +1888,17 @@ fr13_end() {
   for kind in 4 6; do
     address="$STANDIN"
     [ "$kind" = 4 ] || address="$STANDIN6"
-    tcpdump -nn -tt -r "$PRIVATE/edge-$n.pcap" "tcp and dst host $address" 2>/dev/null |
+    tcpdump -nn -tt -r "$PRIVATE/edge-$n.pcap" "tcp and dst host $address and dst port 80" 2>/dev/null |
       awk '/Flags \[S\],/' >"$phase_dir/$n-syn$kind.txt"
     tcpdump -nn -tt -r "$PRIVATE/edge-$n.pcap" "udp and dst host $address" >"$phase_dir/$n-udp$kind.txt" 2>/dev/null
   done
-  printf 'access log %s lines, stand-in %s records; SYN to IPv4 %s, to IPv6 %s; UDP to IPv4 %s, to IPv6 %s\n' \
+  tcpdump -nn -tt -r "$PRIVATE/edge-$n.pcap" "tcp and dst host $STANDIN and dst port 443" 2>/dev/null |
+    awk '/Flags \[S\],/' >"$phase_dir/$n-syn4-target.txt"
+  printf 'access log %s lines, stand-in %s records; SYN to port 80 on IPv4 %s, on IPv6 %s; UDP to IPv4 %s, to IPv6 %s; SYN to the target on IPv4 port 443 %s\n' \
     "$(grep -c . "$phase_dir/$n-access.txt")" "$(grep -c . "$phase_dir/$n-standin.jsonl")" \
     "$(grep -c . "$phase_dir/$n-syn4.txt")" "$(grep -c . "$phase_dir/$n-syn6.txt")" \
-    "$(grep -c . "$phase_dir/$n-udp4.txt")" "$(grep -c . "$phase_dir/$n-udp6.txt")" >"$phase_dir/$n-edge.txt"
+    "$(grep -c . "$phase_dir/$n-udp4.txt")" "$(grep -c . "$phase_dir/$n-udp6.txt")" \
+    "$(grep -c . "$phase_dir/$n-syn4-target.txt")" >"$phase_dir/$n-edge.txt"
 }
 
 # fr13_get CASE NAME COUNT: COUNT plain HTTP requests for NAME over the node
@@ -1911,18 +1920,23 @@ fr13_get() {
 }
 
 # fr13_tcp_ipv6 CASE NAME COUNT [SOURCE]: the judgment of VT-32 on one case:
-# the stand-in got exactly COUNT plain HTTP connections for NAME, all on its
-# IPv6 address and from SOURCE (default the guest's first IPv6 address); no
-# SYN went to its IPv4 address; the access log routed each from the REALITY
-# inbound to ai-ipv6.
+# the stand-in's HTTP service got exactly COUNT connections for NAME, all on
+# its IPv6 address and from SOURCE (default the guest's first IPv6 address);
+# no SYN went to its IPv4 HTTP port; every other TCP connection to the
+# stand-in is the node reaching its target (target.example on IPv4 port 443,
+# see fr13_end); the access log routed each request from the REALITY inbound
+# to ai-ipv6.
 fr13_tcp_ipv6() {
   local reality source="${4:-$GUEST6}"
   reality="$(xray_tag 443)"
-  jq -se --arg h "$2" --argjson c "$3" --arg l "$STANDIN6:80" --arg s "$source" '[.[] | select(.udp | not)]
-    | length == $c and all(.[]; .plain and .local == $l and (.peer | sub(":[0-9]+$"; "")) == $s
+  jq -se --arg h "$2" --argjson c "$3" --arg l "$STANDIN6:80" --arg s "$source" '[.[] | select(.plain)]
+    | length == $c and all(.[]; .local == $l and (.peer | sub(":[0-9]+$"; "")) == $s
       and .requests[0].host == $h and .requests[0].status == 200)' "$phase_dir/$1-standin.jsonl" >/dev/null ||
-    fail "VT-32 $1: the stand-in did not get exactly $3 connections for $2 on $STANDIN6 from $source"
-  [ ! -s "$phase_dir/$1-syn4.txt" ] || fail "VT-32 $1: a SYN went to the stand-in's IPv4 address"
+    fail "VT-32 $1: the stand-in did not get exactly $3 HTTP connections for $2 on $STANDIN6 from $source"
+  jq -se --arg t "$STANDIN:443" 'all(.[] | select((.plain or .udp) | not); .local == $t and .sni == "target.example")' \
+    "$phase_dir/$1-standin.jsonl" >/dev/null ||
+    fail "VT-32 $1: the stand-in got a TCP connection that is neither HTTP nor the node reaching its target"
+  [ ! -s "$phase_dir/$1-syn4.txt" ] || fail "VT-32 $1: a SYN went to the stand-in's IPv4 HTTP port"
   [ "$(grep -cF "accepted tcp:$2:80 [$reality -> ai-ipv6]" "$phase_dir/$1-access.txt")" = "$3" ] ||
     fail "VT-32 $1: the access log does not route each request for $2 from the REALITY inbound to ai-ipv6"
 }
@@ -1998,17 +2012,22 @@ phase_vt32() {
 # VT-32, UDP: tests/guest/udpsend.py sends ten datagrams to each test domain,
 # on both stand-in addresses, as a domain through Mihomo's SOCKS5 UDP to the
 # stand-in's echo port. Verification plan 4.5: they reach only the IPv6
-# address, and no UDP goes to the IPv4 address. The evidence also keeps what
-# the access log says the node received.
+# address, and no UDP goes to the IPv4 address. Mihomo resolves the
+# destination of UDP itself before it sends (ResolveUDP in
+# adapter/outbound/vless.go at v1.19.33) and does not read the guest's hosts
+# file, so it gets the two names in its own hosts table, as a client with its
+# own DNS would. The access log then shows what the node received.
 phase_vt32_udp() {
-  local openai anthropic name n
+  local openai anthropic name n hosts
   openai="$(geo_pick site openai)"
   anthropic="$(geo_pick site anthropic)"
   stop_time_sync
   isolation_on
   fr13_hosts "$openai" 4 6
   fr13_hosts "$anthropic" 4 6
-  mihomo_up main 7890
+  hosts="$(jq -cn --arg a "$openai" --arg b "$anthropic" --arg v4 "$STANDIN" --arg v6 "$STANDIN6" \
+    '{($a): [$v4, $v6], ($b): [$v4, $v6]}')"
+  mihomo_up main 7890 hosts "$hosts"
   fr13_begin vt32-udp
   for name in "$openai" "$anthropic"; do
     ip netns exec vpsns-client python3 "$BUNDLE/tests/guest/udpsend.py" --proxy 127.0.0.1:7890 --host "$name" \
@@ -2016,6 +2035,8 @@ phase_vt32_udp() {
   done
   fr13_end
   mihomo_log main
+  grep -F ' accepted udp:' "$phase_dir/vt32-udp-access.txt" | sed -E 's/^.* accepted //' | sort | uniq -c \
+    >"$phase_dir/vt32-udp-node.txt" || true
   n="$(isolation_counts vt32-udp)"
   for name in "$openai" "$anthropic"; do
     jq -se --arg h "$name" '[.[] | select(.host == $h)] | length == 1 and .[0].sent == 10 and .[0].echoed == 10' \
