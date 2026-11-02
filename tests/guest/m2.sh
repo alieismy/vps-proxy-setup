@@ -976,10 +976,14 @@ inbound_id() {
 }
 
 # client_edit EMAIL FILTER: the user as clients/get returns it, changed by the
-# jq FILTER and posted back whole to clients/update.
+# jq FILTER and posted back to clients/update. clients/get returns the stored
+# record, whose id (a number), reverse and allowedIPs (strings) do not bind
+# to the client that clients/update takes, so they are left out; without id
+# the panel keeps the stored UUID, and without keepAlive the stored value.
 client_edit() {
   panel_api GET "clients/get/$1"
-  jq ".obj.client | $2" "$PANEL_OUT" >"$PRIVATE/client-update.json"
+  jq ".obj.client | del(.id, .uuid, .reverse, .allowedIPs, .keepAlive) | $2" "$PANEL_OUT" \
+    >"$PRIVATE/client-update.json"
   panel_api POST "clients/update/$1" "$PRIVATE/client-update.json"
 }
 
