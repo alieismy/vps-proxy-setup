@@ -1284,6 +1284,11 @@ edge_end() {
     "$(grep -c . "$phase_dir/$n-syn.txt")" >"$phase_dir/$n-edge.txt"
 }
 
+# A forwarder line in the access log names the rewritten destination
+# 127.0.0.1:443, which the tunnel inbound sets before sniffing; the dispatcher
+# adds only the route. So the route tag is the forwarder's decision on the
+# SNI, and the SNI itself is evidenced by the stand-in's log.
+#
 # edge_blocked NAME: the connection did not cross the boundary. The forwarder
 # routed it to blocked, the stand-in has no connection, and no SYN went to
 # the stand-in. A client that got nothing is not enough (FR-02).
@@ -1436,7 +1441,6 @@ phase_vt23() {
   client_curl vt23 --resolve "other.example:443:$NODE_IP" https://other.example/
   edge_end
   ! grep -q 'stand-in' "$phase_dir/vt23.body" 2>/dev/null || fail 'VT-23: the client got stand-in content'
-  grep -qF 'tcp:other.example:443' "$phase_dir/vt23-access.txt" || fail 'VT-23: the forwarder did not see other.example'
   edge_blocked vt23
 }
 
@@ -1482,8 +1486,9 @@ phase_vt26() {
     fail 'VT-26: the client did not get the stand-in content over a verified certificate'
   grep -q 'issuer=CN *= *vps-proxy-setup test CA' "$phase_dir/vt26-cert.txt" ||
     fail 'VT-26: the certificate is not the stand-in one'
-  grep -qF "accepted tcp:target.example:443 [$fwd -> direct]" "$phase_dir/vt26-access.txt" ||
-    fail 'VT-26: the access log does not show the forwarder routing target.example to direct'
+  grep -qF "[$fwd -> direct]" "$phase_dir/vt26-access.txt" ||
+    fail 'VT-26: the access log does not show the forwarder routing to direct'
+  ! grep -qF "[$fwd -> blocked]" "$phase_dir/vt26-access.txt" || fail 'VT-26: the forwarder routed a connection to blocked'
   jq -se 'any(.[]; .sni == "target.example" and any(.requests[]; .status == 200))' "$phase_dir/vt26-standin.jsonl" \
     >/dev/null || fail 'VT-26: the stand-in has no served connection for target.example'
   [ -s "$phase_dir/vt26-syn.txt" ] || fail 'VT-26: no SYN to the stand-in'
