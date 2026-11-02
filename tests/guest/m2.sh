@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck source-path=SCRIPTDIR
 # Guest side of the M2 VM tests (detailed design 9, 19; verification plan
-# VT-10 to VT-13, VT-15 to VT-18). Sources tests/guest/m1.sh for its helpers and the phases of
+# VT-10 to VT-13, VT-15 to VT-18, VT-70, VT-71). Sources tests/guest/m1.sh for its helpers and the phases of
 # the main configuration; tests/vm.py runs one phase per SSH session. The
 # guest is the main configuration with the namespaces, the stand-in and a
 # fresh target-check result of the m1 phase network and the phase m2-prep.
@@ -870,6 +870,259 @@ phase_vt18_short_id() {
     expect_no_secret "$name"
     expect_no_tmp "$name"
   done
+  scan_markers
+}
+
+# --- VT-70 and VT-71 at M2 (detailed design 9.6) ------------------------------
+
+# The panel session of the VT-71 drivers. Step 7 revokes the install token, so
+# the drivers log in with the credentials of the handoff file, as the
+# administrator would (verification plan 2). At the fixed commit, GET
+# <webBasePath>csrf-token starts a session and returns its CSRF token; POST
+# <webBasePath>login takes the form fields username and password with that
+# token in X-CSRF-Token; the session keeps the token after the login, and the
+# API accepts the session cookie, with the token on unsafe methods
+# (internal/web/controller/index.go, controller/api.go, session/csrf.go).
+# The credentials, webBasePath and token stay in $PRIVATE and reach curl as a
+# config on stdin, never as arguments.
+readonly PANEL_JAR="$PRIVATE/panel-cookies"
+readonly PANEL_OUT="$PRIVATE/panel-response.json"
+PANEL_HTTP=000
+
+# panel_request PATH EXTRA_CONFIG [CURL_ARGS...]: one request to the panel on
+# loopback in the session; EXTRA_CONFIG, when not empty, is a private file of
+# further config lines. Sets PANEL_HTTP; the response is in PANEL_OUT.
+panel_request() {
+  local path="$1" extra="$2" code
+  shift 2
+  rm -f "$PANEL_OUT"
+  code="$({
+    printf 'url = "%s%s"\n' "$(cat "$PRIVATE/panel-base")" "$path"
+    if [ -s "$PRIVATE/panel-csrf" ]; then
+      printf 'header = "X-CSRF-Token: %s"\n' "$(cat "$PRIVATE/panel-csrf")"
+    fi
+    if [ -n "$extra" ]; then cat "$extra"; fi
+  } | curl -q --silent --noproxy '*' --proto '=http' --connect-timeout 5 --max-time 60 \
+    -b "$PANEL_JAR" -c "$PANEL_JAR" -o "$PANEL_OUT" -w '%{http_code}' "$@" -K -)" || code=000
+  PANEL_HTTP="$code"
+}
+
+panel_login() {
+  local port base user pass
+  port="$(jq -r '.panel.port' "$HANDOFF")"
+  base="$(jq -r '.panel.webBasePath' "$HANDOFF")"
+  user="$(jq -r '.panel.username' "$HANDOFF")"
+  pass="$(jq -r '.panel.password' "$HANDOFF")"
+  # Plain forms only, so that nothing needs quoting in the curl config.
+  [[ "$port" =~ ^[0-9]+$ && "$base" =~ ^/[A-Za-z0-9]+/$ && "$user" =~ ^[A-Za-z0-9]+$ && "$pass" =~ ^[A-Za-z0-9]+$ ]] ||
+    driver_fail 'the panel fields of the handoff are not in the expected plain form'
+  printf 'http://127.0.0.1:%s%s' "$port" "$base" >"$PRIVATE/panel-base"
+  rm -f "$PANEL_JAR" "$PRIVATE/panel-csrf"
+  panel_request csrf-token ''
+  { [ "$PANEL_HTTP" = 200 ] &&
+    jq -e '.success == true and (.obj | type == "string" and test("^[A-Za-z0-9_=+/.-]+$"))' "$PANEL_OUT" >/dev/null; } ||
+    driver_fail "csrf-token: HTTP $PANEL_HTTP"
+  jq -j '.obj' "$PANEL_OUT" >"$PRIVATE/panel-csrf"
+  printf 'data-urlencode = "username=%s"\ndata-urlencode = "password=%s"\n' "$user" "$pass" >"$PRIVATE/panel-login"
+  panel_request login "$PRIVATE/panel-login"
+  rm -f "$PRIVATE/panel-login"
+  { [ "$PANEL_HTTP" = 200 ] && jq -e '.success == true' "$PANEL_OUT" >/dev/null; } ||
+    driver_fail "login: HTTP $PANEL_HTTP or refused"
+  log 'logged in to the panel with the handoff credentials'
+}
+
+# panel_api METHOD PATH [BODY_FILE [CONTENT_TYPE]]: one API request in the
+# session; HTTP 200 with success true, or the driver fails.
+panel_api() {
+  local method="$1" path="$2" body="${3-}" ctype="${4-application/json}"
+  local -a data=()
+  [ -z "$body" ] || data=(-H "Content-Type: $ctype" --data-binary "@$body")
+  panel_request "panel/api/$path" '' -X "$method" "${data[@]}"
+  { [ "$PANEL_HTTP" = 200 ] && jq -e '.success == true' "$PANEL_OUT" >/dev/null 2>&1; } ||
+    driver_fail "$method $path: HTTP $PANEL_HTTP, success $(jq -c '.success' "$PANEL_OUT" 2>/dev/null || echo '?')"
+  printf '%s %s: HTTP %s, success\n' "$method" "$path" "$PANEL_HTTP" >>"$phase_dir/api.txt"
+}
+
+# panel_setting FILTER: all settings read, changed by the jq FILTER and
+# written back whole, as at M1 (setting/update is not a PATCH, 15.1).
+panel_setting() {
+  panel_api POST setting/all
+  jq -c ".obj | $1" "$PANEL_OUT" >"$PRIVATE/setting-update.json"
+  panel_api POST setting/update "$PRIVATE/setting-update.json"
+}
+
+# inbound_edit PROTOCOL FILTER: the deployed inbound with that protocol, as the
+# list returns it, changed by the jq FILTER and posted back whole, as the
+# panel's form does. On this path upstream keeps the stored users and the
+# enable flag (UpdateInbound in internal/web/service/inbound.go).
+inbound_edit() {
+  local id
+  panel_api GET inbounds/list
+  id="$(jq -r --arg p "$1" '[.obj[] | select(.protocol == $p) | .id] | if length == 1 then .[0] else "" end' \
+    "$PANEL_OUT")"
+  [ -n "$id" ] || driver_fail "not one $1 inbound"
+  jq --argjson id "$id" ".obj[] | select(.id == \$id) | del(.clientStats) | $2" "$PANEL_OUT" \
+    >"$PRIVATE/inbound-update.json"
+  panel_api POST "inbounds/update/$id" "$PRIVATE/inbound-update.json"
+}
+
+# inbound_id PROTOCOL: sets INBOUND_ID to the deployed inbound with that protocol.
+INBOUND_ID=''
+inbound_id() {
+  panel_api GET inbounds/list
+  INBOUND_ID="$(jq -r --arg p "$1" '[.obj[] | select(.protocol == $p) | .id] | if length == 1 then .[0] else "" end' \
+    "$PANEL_OUT")"
+  [ -n "$INBOUND_ID" ] || driver_fail "not one $1 inbound"
+}
+
+# client_edit EMAIL FILTER: the user as clients/get returns it, changed by the
+# jq FILTER and posted back whole to clients/update.
+client_edit() {
+  panel_api GET "clients/get/$1"
+  jq ".obj.client | $2" "$PANEL_OUT" >"$PRIVATE/client-update.json"
+  panel_api POST "clients/update/$1" "$PRIVATE/client-update.json"
+}
+
+# template_edit FILTER: the Xray template changed by the jq FILTER and saved
+# through xray/update, as deploy step 6 writes it. The save restarts Xray when
+# it runs (15.1).
+template_edit() {
+  panel_api POST xray/
+  jq '.obj | fromjson' "$PANEL_OUT" >"$PRIVATE/template-read.json"
+  jq -rn --slurpfile r "$PRIVATE/template-read.json" '"xraySetting=" + ($r[0].xraySetting | '"$1"' | tojson | @uri)
+    + "&outboundTestUrl=" + ($r[0].outboundTestUrl | @uri)' >"$PRIVATE/template-form"
+  panel_api POST xray/update "$PRIVATE/template-form" application/x-www-form-urlencoded
+}
+
+# wait_port PORT STATE: until port_state of the tool prints STATE. 90 s: a
+# change that the running core does not take is applied by the panel's job
+# that restarts Xray every 30 seconds when a restart is pending.
+wait_port() {
+  local i
+  for i in $(seq 90); do
+    [ "$(vps_fn port_state "$1")" != "$2" ] || return 0
+    sleep 1
+  done
+  driver_fail "port $1 did not become $2"
+}
+
+# m2_check NAME: one check run in the current state; tests/vm.py judges it.
+m2_check() {
+  capture "$1" "$TOOL" check
+  expect_rc "$1" 1
+  expect_clean "$1"
+  expect_no_secret "$1"
+}
+
+# VT-70 right after a complete deploy, in the same boot. This disk is the
+# base of the baseline and of each VT-71 injection.
+phase_vt70_deploy() {
+  settle
+  keeper_start
+  deploy_yes vt70-deploy "$TOOL" deploy --input "$M2_INPUT"
+  keeper_stop
+  collect_markers
+  expect_rc vt70-deploy 1
+  expect_clean vt70-deploy
+  expect_err vt70-deploy '[x] 第 1～7 步完成'
+  expect_fails vt70-deploy
+  expect_no_secret vt70-deploy
+  wait_xui_stable
+  m2_check check
+  scan_markers
+}
+
+# The baseline of VT-71 at M2, after a new boot of the deployed disk, as in
+# each injection: check between state snapshots, so the run also shows that it
+# leaves the deployed host as it was; and the listeners of 443 by address
+# family, for listen.reality (DO-2).
+phase_vt70() {
+  settle
+  wait_xui_stable
+  collect_markers
+  observe check m2_check
+  { ss -Hltne -4 'sport = :443'; echo '== -6'; ss -Hltne -6 'sport = :443'; } >"$phase_dir/listen-443.txt" 2>&1
+  scan_markers
+}
+
+# One VT-71 injection of M2 on its own overlay of the deployed disk (detailed
+# design 9.6); tests/vm.py compares the check result with the baseline.
+phase_vt71() {
+  local name="$1"
+  settle
+  wait_xui_stable
+  case "$name" in
+    install-result | state-perms | record-node-ip) ;;
+    *) panel_login ;;
+  esac
+  case "$name" in
+    inbound-extra)
+      jq -n '{enable: true, remark: "vt71", listen: "127.0.0.1", port: 8443, protocol: "vless",
+        settings: {clients: [], decryption: "none", encryption: "none"},
+        streamSettings: {network: "tcp", security: "none"}, sniffing: {enabled: false}}' >"$PRIVATE/vt71-inbound.json"
+      panel_api POST inbounds/add "$PRIVATE/vt71-inbound.json"
+      ;;
+    reality-disabled)
+      inbound_id vless
+      printf '{"enable":false}\n' >"$PRIVATE/vt71-enable.json"
+      panel_api POST "inbounds/setEnable/$INBOUND_ID" "$PRIVATE/vt71-enable.json"
+      wait_port 443 none
+      ;;
+    server-names) inbound_edit vless '.streamSettings.realitySettings.serverNames += ["other.example"]' ;;
+    share-host) inbound_edit vless '.shareAddr = "node.example"' ;;
+    exclude-sub) inbound_edit vless '.excludeFromSub = true' ;;
+    host-domain)
+      inbound_id vless
+      jq -n --argjson id "$INBOUND_ID" '{inboundIds: [$id], hosts: ["cdn.example"], remark: "vt71",
+        security: "same"}' >"$PRIVATE/vt71-host.json"
+      panel_api POST hosts/add "$PRIVATE/vt71-host.json"
+      ;;
+    forwarder-dest) inbound_edit tunnel '.sniffing.destOverride = ["tls", "http"]' ;;
+    forwarder-target) inbound_edit tunnel '.settings.rewriteAddress = "target.example" | .sniffing.routeOnly = true' ;;
+    forwarder-listen)
+      inbound_edit tunnel '.listen = "0.0.0.0"'
+      wait_port 20443 exposed
+      ;;
+    rules-order) template_edit '.routing.rules |= .[:1] + [.[2], .[1]] + .[3:]' ;;
+    rules-cn) template_edit '.routing.rules |= del(.[3])' ;;
+    outbound-blocked)
+      template_edit '.outbounds |= map(if .tag == "blocked" then {tag, protocol: "freedom"} else . end)'
+      ;;
+    api-listen)
+      template_edit '.inbounds |= map(if .tag == "api" then .listen = "0.0.0.0" else . end)'
+      wait_port 62789 exposed
+      ;;
+    metrics-listen)
+      template_edit '.metrics.listen = "0.0.0.0:11111"'
+      wait_port 11111 exposed
+      ;;
+    client-flow) client_edit bob '.flow = ""' ;;
+    client-limit-ip) client_edit alice '.limitIp = 2' ;;
+    sub-listen)
+      panel_setting '.subListen = "0.0.0.0"'
+      panel_api POST setting/restartPanel
+      wait_port 2096 exposed
+      ;;
+    sub-domain) panel_setting '.subDomain = ""' ;;
+    sub-uri) panel_setting '.subURI = "https://other.proxy.example" + .subPath' ;;
+    sub-clash) panel_setting '.subClashEnableRouting = false' ;;
+    sub-remark) panel_setting '.remarkTemplate = "{{INBOUND}}-{{EMAIL}}"' ;;
+    api-token)
+      printf '{"name":"vt71","scope":"monitor"}\n' >"$PRIVATE/vt71-token.json"
+      panel_api POST setting/apiTokens/create "$PRIVATE/vt71-token.json"
+      ;;
+    install-result) install -m 0600 /dev/null "$XUI_RESULT" ;;
+    state-perms) chmod 0644 "$DEPLOY_CONF" ;;
+    record-node-ip) sed -i 's/^node_ip=.*/node_ip=192.0.2.9/' "$DEPLOY_CONF" ;;
+    *) fail "unknown injection: $name" ;;
+  esac
+  # Xray applies inbound and template changes after the response: wait for
+  # the listeners that the injection does not move.
+  [ "$name" = reality-disabled ] || wait_port 443 exposed
+  [ "$name" = forwarder-listen ] || wait_port 20443 loopback
+  wait_xui_stable
+  collect_markers
+  m2_check check
   scan_markers
 }
 

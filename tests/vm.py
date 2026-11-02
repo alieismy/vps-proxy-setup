@@ -22,6 +22,10 @@ from a local asset directory. Suites:
                 VT-10 (deploy steps 1 to 4, with VT-13 on its output), VT-12
                 (with VT-13 on the real installer output) and VT-13 with a
                 failing installer.
+  m2-check      one guest with the namespaces, the stand-in and a fresh
+                target-check result: a complete deploy and check (VT-70);
+                then on overlays of it the baseline of M2 and one overlay per
+                VT-71 injection of M2, each judged here against the baseline.
 
 tests/guest/m1.sh is the guest side of M1 and judges everything except
 VT-71; tests/guest/m2.sh, which sources it, the guest side of M2.
@@ -117,6 +121,50 @@ INJECTIONS = {
     'acme': {'absent.acme'},
     'cf-credentials': {'absent.cf-credentials'},
     'ufw-rule': {'hardening.verify'},
+}
+# The M2 baseline of check after deploy steps 1 to 7, before cloudflared
+# (VT-70, detailed design 9.6). An inferred expectation, corrected from the
+# archived baseline as at M1.
+M2_BASELINE = {
+    'PASS': 'root platform deps xui.version xui.files xui.unit xui.env xui.service xui.ipl xui.db panel.listen '
+            'inbounds.set reality.settings reality.share reality.hosts forwarder.settings routing.rules '
+            'routing.outbounds clients.flow clients.limit-ip sub.enable sub.listen sub.cert sub.domain sub.uri '
+            'sub.paths sub.clash sub.json sub.info-node sub.updates sub.remark listen.reality listen.forwarder '
+            'listen.sub listen.api listen.metrics secrets.install-result secrets.api-tokens absent.acme '
+            'absent.cf-credentials state.perms record.consistent hardening.verify',
+    'FAIL': 'cfd.files cfd.unit cfd.service cfd.autoupdate cfd.token cfd.metrics cfd.ready cfd.routes',
+    'SKIP': 'routing.ai-ipv6 ipv6.egress sub.rules',
+    'WARN': 'secrets.handoff',
+    'INFO': 'clients.count',
+}
+# VT-71 at M2 (detailed design 9.6): injection -> the items that leave PASS,
+# for FAIL, or for the level given.
+M2_INJECTIONS = {
+    'inbound-extra': {'inbounds.set'},
+    'reality-disabled': {'inbounds.set', 'listen.reality'},
+    'server-names': {'reality.settings'},
+    'share-host': {'reality.share', 'record.consistent'},
+    'exclude-sub': {'reality.share'},
+    'host-domain': {'reality.hosts'},
+    'forwarder-dest': {'forwarder.settings'},
+    'forwarder-target': {'forwarder.settings'},
+    'forwarder-listen': {'inbounds.set', 'listen.forwarder'},
+    'rules-order': {'routing.rules'},
+    'rules-cn': {'routing.rules'},
+    'outbound-blocked': {'routing.outbounds'},
+    'api-listen': {'listen.api'},
+    'metrics-listen': {'listen.metrics'},
+    'client-flow': {'clients.flow'},
+    'client-limit-ip': {'clients.limit-ip'},
+    'sub-listen': {'sub.listen', 'listen.sub'},
+    'sub-domain': {'sub.domain', 'sub.uri', 'record.consistent'},
+    'sub-uri': {'sub.uri'},
+    'sub-clash': {'sub.clash'},
+    'sub-remark': {'sub.remark'},
+    'api-token': {'secrets.api-tokens': 'WARN'},
+    'install-result': {'secrets.install-result'},
+    'state-perms': {'state.perms'},
+    'record-node-ip': {'record.consistent'},
 }
 REPORT_LINE = re.compile(r'^\[(PASS|FAIL|WARN|SKIP|INFO)\] (\S+)', re.M)
 
@@ -523,27 +571,32 @@ def transitions(base, got):
             if base.get(item) != got.get(item)}
 
 
-def judge_baseline(ctx, got):
+def judge_baseline(ctx, got, table=BASELINE, section='9.5', title='VT-71 baseline', name='baseline'):
     if got is None:
-        ctx.fail('VT-71: no baseline')
+        ctx.fail(f'{title}: no check output')
         return
-    want = {item: level for level, items in BASELINE.items() for item in items.split()}
+    want = {item: level for level, items in table.items() for item in items.split()}
     diff = transitions(want, got)
-    record(ctx, 'baseline', {'verdicts': got, 'differences from detailed design 9.5 [expected, actual]': diff})
-    ctx.expect(not diff, 'VT-71 baseline as in detailed design 9.5' + (f'; differences: {diff}' if diff else ''))
+    record(ctx, name, {'verdicts': got, f'differences from detailed design {section} [expected, actual]': diff})
+    ctx.expect(not diff, f'{title} as in detailed design {section}' + (f'; differences: {diff}' if diff else ''))
 
 
 def judge_injection(ctx, name, base, got, expected):
-    """Only the expected items leave PASS, each for FAIL; the item set is unchanged."""
+    """Only the expected items leave PASS, each for its level (FAIL when
+    EXPECTED is a set); the item set is unchanged."""
     if base is None or got is None:
         ctx.fail(f'VT-71 {name}: no baseline or no check output')
         return
+    if isinstance(expected, set):
+        expected = dict.fromkeys(expected, 'FAIL')
+    expected = dict(sorted(expected.items()))
     changed = transitions(base, got)
     left_pass = {item for item, (before, _) in changed.items() if before == 'PASS'}
-    ok = set(got) == set(base) and left_pass == expected and all(got[item] == 'FAIL' for item in expected)
-    record(ctx, name, {'expected PASS -> FAIL': sorted(expected), 'transitions [baseline, injected]': changed,
+    ok = (set(got) == set(base) and left_pass == set(expected) and
+          all(got[item] == level for item, level in expected.items()))
+    record(ctx, name, {'expected from PASS': expected, 'transitions [baseline, injected]': changed,
                        'result': 'PASS' if ok else 'FAIL'})
-    ctx.expect(ok, f'VT-71 {name}: PASS -> FAIL exactly {sorted(expected)}' + ('' if ok else f'; got {changed}'))
+    ctx.expect(ok, f'VT-71 {name}: from PASS exactly {expected}' + ('' if ok else f'; got {changed}'))
 
 
 def judge_vt73(ctx, base, got):
@@ -654,7 +707,31 @@ def judge_short_ids(ctx, names):
         ctx.fail('VT-16: two deploys of the run have the same shortId')
 
 
-SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy}
+def m2_check(ctx, main):
+    disk = ctx.overlay(main, 'm2.qcow2')
+    with Guest(ctx, 'm2', disk) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('vt70-deploy', required=True, script='m2.sh')
+        guest.poweroff()
+    judge_baseline(ctx, verdicts(ctx, ctx.evidence / 'm2/guest/vt70-deploy/check.out'), M2_BASELINE, '9.6',
+                   'VT-70 right after the deploy', 'vt70-deploy')
+    # The deployed host; the baseline and each injection boot an overlay of it.
+    with Guest(ctx, 'vt70', ctx.overlay(disk, 'vt70.qcow2')) as guest:
+        guest.phase('vt70', script='m2.sh')
+        guest.poweroff()
+    baseline = verdicts(ctx, ctx.evidence / 'vt70/guest/vt70/check.out')
+    judge_baseline(ctx, baseline, M2_BASELINE, '9.6', 'VT-70 and the VT-71 baseline of M2')
+    for name, expected in M2_INJECTIONS.items():
+        label = f'vt71-{name}'
+        with Guest(ctx, label, ctx.overlay(disk, f'{label}.qcow2')) as guest:
+            guest.phase('vt71', name, script='m2.sh')
+            guest.poweroff()
+        judge_injection(ctx, name, baseline, verdicts(ctx, ctx.evidence / f'{label}/guest/{label}/check.out'),
+                        expected)
+
+
+SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy, 'm2-check': m2_check}
 
 
 def main():
