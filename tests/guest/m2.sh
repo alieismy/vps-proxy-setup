@@ -1641,9 +1641,11 @@ readonly CN_IPV4=223.5.5.5
 # route_test CASE INBOUND_TAG FIELD VALUE: one query to the panel's route test
 # (POST panel/api/xray/routeTest, detailed design 19), which asks the running
 # core which outbound it would pick, without sending traffic. FIELD is domain
-# or ip. The answer goes to vt30.jsonl.
+# or ip. The answer goes to vt30.jsonl. The form ends without a newline: the
+# panel takes form values as sent, and a newline after the last one would
+# make the tag one that no rule names.
 route_test() {
-  jq -rn --arg t "$2" --arg f "$3" --arg v "$4" '"\($f)=\($v | @uri)&port=443&network=tcp&inboundTag=\($t | @uri)"' \
+  jq -jn --arg t "$2" --arg f "$3" --arg v "$4" '"\($f)=\($v | @uri)&port=443&network=tcp&inboundTag=\($t | @uri)"' \
     >"$PRIVATE/route-test-form"
   panel_api POST xray/routeTest "$PRIVATE/route-test-form" application/x-www-form-urlencoded
   jq -c --arg c "$1" --arg f "$3" --arg v "$4" '{case: $c, query: "\($f) \($v)", matched: .obj.matched,
