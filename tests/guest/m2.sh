@@ -1632,11 +1632,20 @@ phase_vt29() {
   done
 }
 
-# VT-30 and VT-31 (D22): a domain in the bundled geosite:cn and an IPv4
-# address in the bundled geoip:cn. Both are in the upstream lists the release
-# bundles; that the bundled copies hold them is what VT-30 shows.
-readonly CN_DOMAIN=www.baidu.com
-readonly CN_IPV4=223.5.5.5
+# VT-30 and VT-31 (D22): the test vectors come from the geo data the release
+# bundles, chosen at run time (verification plan 3.7), so the repository names
+# none: the first domain of type Domain or Full in geosite:cn and the second
+# address of the first IPv4 block of geoip:cn (tests/guest/geodat.py). The
+# choice depends only on the files, so each phase makes it again.
+readonly GEO_DIR="${XRAY_CONFIG%/*}"
+
+# geo_pick site|ip CODE: the vector of that list, on standard output.
+geo_pick() {
+  local file=geosite.dat
+  [ "$1" = ip ] && file=geoip.dat
+  python3 "$BUNDLE/tests/guest/geodat.py" "$1" "$GEO_DIR/$file" "$2" ||
+    driver_fail "no test vector for $1 $2 in the bundled $file"
+}
 
 # route_test CASE INBOUND_TAG FIELD VALUE: one query to the panel's route test
 # (POST panel/api/xray/routeTest, detailed design 19), which asks the running
@@ -1664,13 +1673,16 @@ route_is() {
 # the generated config, which must be direct. From the forwarder,
 # target.example goes to direct and other.example to blocked (rules 1 and 2).
 phase_vt30() {
-  local reality fwd
+  local reality fwd cn_domain cn_ipv4
   reality="$(xray_tag 443)"
   fwd="$(xray_tag 20443)"
+  cn_domain="$(geo_pick site cn)"
+  cn_ipv4="$(geo_pick ip cn)"
+  (cd "$GEO_DIR" && sha256sum geosite.dat geoip.dat) >"$phase_dir/vt30-geodata.txt"
   panel_login
   rm -f "$phase_dir/vt30.jsonl"
-  route_test cn-domain "$reality" domain "$CN_DOMAIN"
-  route_test cn-ipv4 "$reality" ip "$CN_IPV4"
+  route_test cn-domain "$reality" domain "$cn_domain"
+  route_test cn-ipv4 "$reality" ip "$cn_ipv4"
   route_test control "$reality" domain probe.example
   route_test forwarder-target "$fwd" domain target.example
   route_test forwarder-other "$fwd" domain other.example
@@ -1678,8 +1690,8 @@ phase_vt30() {
     "$phase_dir/vt30.jsonl" >"$phase_dir/vt30.txt"
   printf 'first outbound of the generated config: %s\n' "$(jq -r '.outbounds[0].tag' "$XRAY_CONFIG")" \
     >>"$phase_dir/vt30.txt"
-  route_is cn-domain true blocked || fail "VT-30: $CN_DOMAIN from the REALITY inbound is not routed to blocked"
-  route_is cn-ipv4 true blocked || fail "VT-30: $CN_IPV4 from the REALITY inbound is not routed to blocked"
+  route_is cn-domain true blocked || fail "VT-30: $cn_domain from the REALITY inbound is not routed to blocked"
+  route_is cn-ipv4 true blocked || fail "VT-30: $cn_ipv4 from the REALITY inbound is not routed to blocked"
   { route_is control true direct ||
     { route_is control false '' && jq -e '.outbounds[0].tag == "direct"' "$XRAY_CONFIG" >/dev/null; }; } ||
     fail 'VT-30: probe.example from the REALITY inbound would not go to direct'
@@ -1691,23 +1703,24 @@ phase_vt30() {
 # domain fails, routed from the REALITY inbound to blocked by a rule;
 # probe.example gets through, to direct.
 phase_vt31() {
-  local reality
+  local reality cn_domain
   reality="$(xray_tag 443)"
+  cn_domain="$(geo_pick site cn)"
   mihomo_up main 7890
   edge_begin vt31
-  client_curl vt31-cn -x http://127.0.0.1:7890 "https://$CN_DOMAIN/"
+  client_curl vt31-cn -x http://127.0.0.1:7890 "https://$cn_domain/"
   local cn_rc="$CURL_RC" cn_code="$CURL_HTTP"
   client_curl vt31-probe -x http://127.0.0.1:7890 http://probe.example/
   edge_end
   mihomo_log main
-  printf '%s\n' "$CN_DOMAIN: curl exit $cn_rc, HTTP $cn_code" "probe.example: curl exit $CURL_RC, HTTP $CURL_HTTP" \
+  printf '%s\n' "$cn_domain: curl exit $cn_rc, HTTP $cn_code" "probe.example: curl exit $CURL_RC, HTTP $CURL_HTTP" \
     >"$phase_dir/vt31.txt"
-  { [ "$cn_rc" != 0 ] || [ "$cn_code" != 200 ]; } || fail "VT-31: $CN_DOMAIN was reached over the node"
-  grep -qF "accepted tcp:$CN_DOMAIN:443 [$reality -> blocked]" "$phase_dir/vt31-access.txt" ||
-    fail "VT-31: the access log does not show $CN_DOMAIN routed from the REALITY inbound to blocked"
-  [ "$(grep -cF "tcp:$CN_DOMAIN:" "$phase_dir/vt31-access.txt")" = \
-    "$(grep -cF "tcp:$CN_DOMAIN:443 [$reality -> blocked]" "$phase_dir/vt31-access.txt")" ] ||
-    fail "VT-31: $CN_DOMAIN was also routed elsewhere"
+  { [ "$cn_rc" != 0 ] || [ "$cn_code" != 200 ]; } || fail "VT-31: $cn_domain was reached over the node"
+  grep -qF "accepted tcp:$cn_domain:443 [$reality -> blocked]" "$phase_dir/vt31-access.txt" ||
+    fail "VT-31: the access log does not show $cn_domain routed from the REALITY inbound to blocked"
+  [ "$(grep -cF "tcp:$cn_domain:" "$phase_dir/vt31-access.txt")" = \
+    "$(grep -cF "tcp:$cn_domain:443 [$reality -> blocked]" "$phase_dir/vt31-access.txt")" ] ||
+    fail "VT-31: $cn_domain was also routed elsewhere"
   { [ "$CURL_RC" = 0 ] && [ "$CURL_HTTP" = 200 ] && grep -qx 'stand-in probe.example' "$phase_dir/vt31-probe.body"; } ||
     fail 'VT-31: http://probe.example/ over the node failed'
   grep -qF "accepted tcp:probe.example:80 [$reality >> direct]" "$phase_dir/vt31-access.txt" ||
