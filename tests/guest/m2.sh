@@ -1812,6 +1812,7 @@ phase_fr13_prep() {
   capture standin-http6 curl -q -fsS --noproxy '*' --max-time 10 -o /dev/null -H 'Host: probe.example' \
     "http://[$STANDIN6]/"
   expect_rc standin-http6 0
+  { ls -l /etc/resolv.conf; cat /etc/resolv.conf; } >"$phase_dir/resolv.txt" 2>&1
   printf '%s\n' 'deviation: new connections of the guest through the user-network uplink are rejected and counted during the FR-13 cases (verification plan 3.6)' \
     >>"$phase_dir/deviations.txt"
 }
@@ -1827,7 +1828,7 @@ isolation_on() {
   [ -n "$up" ] || driver_fail 'no single IPv4 default route for the egress isolation'
   for cmd in iptables ip6tables; do
     if "$cmd" -w -N "$ISOLATION_CHAIN" 2>/dev/null; then
-      "$cmd" -w -A "$ISOLATION_CHAIN" -j LOG --log-prefix 'vps-isolation: '
+      "$cmd" -w -A "$ISOLATION_CHAIN" -j LOG --log-prefix 'vps-isolation: ' --log-uid
       "$cmd" -w -A "$ISOLATION_CHAIN" -p udp --dport 53 -j REJECT
       "$cmd" -w -A "$ISOLATION_CHAIN" -p tcp --dport 53 -j REJECT
       "$cmd" -w -A "$ISOLATION_CHAIN" -j REJECT
@@ -1997,7 +1998,7 @@ phase_vt32() {
   fr13_get vt32-extra "$openai" 1
   fr13_end
   [ "$FR13_OK" = 1 ] || fail "VT-32: the request for $openai after the second address failed"
-  seen="$(jq -rs '[.[] | select(.udp | not) | .peer | sub(":[0-9]+$"; "")] | unique | join(" ")' \
+  seen="$(jq -rs '[.[] | select(.plain) | .peer | sub(":[0-9]+$"; "")] | unique | join(" ")' \
     "$phase_dir/vt32-extra-standin.jsonl")"
   printf 'source address seen by the stand-in with two addresses on the /64: %s\n' "$seen" \
     >"$phase_dir/vt32-extra.txt"
@@ -2018,7 +2019,7 @@ phase_vt32() {
 # file, so it gets the two names in its own hosts table, as a client with its
 # own DNS would. The access log then shows what the node received.
 phase_vt32_udp() {
-  local openai anthropic name n hosts
+  local openai anthropic name n hosts sampler
   openai="$(geo_pick site openai)"
   anthropic="$(geo_pick site anthropic)"
   stop_time_sync
@@ -2029,11 +2030,23 @@ phase_vt32_udp() {
     '{($a): [$v4, $v6], ($b): [$v4, $v6]}')"
   mihomo_up main 7890 hosts "$hosts"
   fr13_begin vt32-udp
+  # Which process opens sockets to port 53 during the case, if any: run
+  # 41488828274 rejected DNS queries here, and none in the TCP cases.
+  (
+    while :; do
+      ss -Htunap '( dport = :53 )' 2>/dev/null || true
+      sleep 0.2
+    done
+  ) >"$PRIVATE/vt32-udp-dns-sockets.txt" &
+  sampler=$!
   for name in "$openai" "$anthropic"; do
     ip netns exec vpsns-client python3 "$BUNDLE/tests/guest/udpsend.py" --proxy 127.0.0.1:7890 --host "$name" \
       --port "$UDP_ECHO_PORT" --count 10 >>"$phase_dir/vt32-udp.jsonl"
   done
   fr13_end
+  kill "$sampler"
+  wait "$sampler" || true
+  awk '{ $5 = ""; print }' "$PRIVATE/vt32-udp-dns-sockets.txt" | sort | uniq -c >"$phase_dir/vt32-udp-dns-sockets.txt"
   mihomo_log main
   grep -F ' accepted udp:' "$phase_dir/vt32-udp-access.txt" | sed -E 's/^.* accepted //' | sort | uniq -c \
     >"$phase_dir/vt32-udp-node.txt" || true
