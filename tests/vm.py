@@ -28,7 +28,7 @@ from a local asset directory. Suites:
                 VT-71 injection of M2, each judged here against the baseline.
   m2-sni        one guest: a complete deploy, 443/tcp added with
                 vps-hardening ports and confirmed from a new session, the
-                test deviations, then VT-20 to VT-26 in turn.
+                test deviations, then VT-20 to VT-29 in turn.
 
 tests/guest/m1.sh is the guest side of M1 and judges everything except
 VT-71; tests/guest/m2.sh, which sources it, the guest side of M2.
@@ -749,7 +749,7 @@ def m2_check(ctx, main):
 
 
 def m2_sni(ctx, main):
-    """VT-20 to VT-26 (detailed design 9.7): the guest judges each case. The
+    """VT-20 to VT-29 (detailed design 9.7): the guest judges each case. The
     administrator's step of verification plan 3.3 opens 443/tcp, as the
     main configuration applies vps-hardening: on a terminal, confirmed from a
     new session."""
@@ -764,6 +764,12 @@ def m2_sni(ctx, main):
         guest.phase('sni-prep', required=True, script='m2.sh')
         for name in ('vt20', 'vt21', 'vt22', 'vt23', 'vt24', 'vt25', 'vt26'):
             guest.phase(name, script='m2.sh')
+        # VT-27 runs each shape twenty times and is never retried
+        # (verification plan 6).
+        for shape in ('records', 'segments', 'large'):
+            guest.phase('vt27', shape, script='m2.sh')
+        guest.phase('vt28', script='m2.sh')
+        guest.phase('vt29', script='m2.sh')
         guest.poweroff()
 
 

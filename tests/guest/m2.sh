@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck source-path=SCRIPTDIR
 # Guest side of the M2 VM tests (detailed design 9, 19; verification plan
-# VT-10 to VT-13, VT-15 to VT-18, VT-20 to VT-26, VT-70, VT-71). Sources
+# VT-10 to VT-13, VT-15 to VT-18, VT-20 to VT-29, VT-70, VT-71). Sources
 # tests/guest/m1.sh for its helpers and the phases of the main configuration; tests/vm.py runs one phase per SSH session. The
 # guest is the main configuration with the namespaces, the stand-in and a
 # fresh target-check result of the m1 phase network and the phase m2-prep.
@@ -1131,7 +1131,7 @@ phase_vt71() {
 }
 
 # ---------------------------------------------------------------------------
-# REALITY and the forwarding boundary: VT-20 to VT-26 (detailed design 9.7,
+# REALITY and the forwarding boundary: VT-20 to VT-29 (detailed design 9.7,
 # 17; verification plan 3.3, 3.6, 4.4). The probes come from the client
 # namespace to the node address on 443.
 
@@ -1492,6 +1492,132 @@ phase_vt26() {
   jq -se 'any(.[]; .sni == "target.example" and any(.requests[]; .status == 200))' "$phase_dir/vt26-standin.jsonl" \
     >/dev/null || fail 'VT-26: the stand-in has no served connection for target.example'
   [ -s "$phase_dir/vt26-syn.txt" ] || fail 'VT-26: no SYN to the stand-in'
+}
+
+# VT-27 SHAPE: twenty unauthenticated connections with SNI target.example
+# whose ClientHello tests/guest/hello.py reshapes: split into TLS records,
+# sent in four segments with pauses of up to 300 ms, or large with ML-KEM in
+# one send. Every one must be forwarded to the stand-in. A failure is a
+# finding for solution design 4.4 and SR-3, not to be retried (verification
+# plan 6).
+phase_vt27() {
+  local shape="${1-}" fwd out n ok direct blocked served syn
+  case "$shape" in
+    records | segments | large) ;;
+    *) driver_fail "unknown VT-27 shape: $shape" ;;
+  esac
+  fwd="$(xray_tag 20443)"
+  out="$phase_dir/vt27-$shape"
+  edge_begin "vt27-$shape"
+  ip netns exec vpsns-client python3 "$BUNDLE/tests/guest/hello.py" --host "$NODE_IP" --shape "$shape" --count 20 \
+    >"$out.jsonl" 2>"$out.err" || true
+  edge_end
+  n="$(grep -c . "$out.jsonl")" || true
+  [ "$n" = 20 ] || driver_fail "VT-27 $shape: $n attempts recorded"
+  # The driver itself: the ClientHello went out in the intended shape.
+  case "$shape" in
+    records) jq -se 'all(.[]; .records >= 3)' "$out.jsonl" >/dev/null ;;
+    segments) jq -se 'all(.[]; (.sent | length) == 4 and .gaps[0] >= 0.1 and .gaps[1] >= 0.2 and .gaps[2] >= 0.3)' \
+      "$out.jsonl" >/dev/null ;;
+    large) jq -se 'all(.[]; (.groups | index("X25519MLKEM768")) != null and (.sent | length) == 1)' \
+      "$out.jsonl" >/dev/null ;;
+  esac || driver_fail "VT-27 $shape: the ClientHello was not sent in that shape"
+  ok="$(jq -s '[.[] | select(.ok)] | length' "$out.jsonl")"
+  direct="$(grep -cF "[$fwd -> direct]" "$out-access.txt")" || true
+  blocked="$(grep -cF "[$fwd -> blocked]" "$out-access.txt")" || true
+  served="$(jq -s '[.[] | select(.sni == "target.example" and any(.requests[]; .status == 200))] | length' \
+    "$out-standin.jsonl")"
+  syn="$(grep -c . "$out-syn.txt")" || true
+  printf '%s\n' "$shape: client got the body $ok of $n" "forwarder to direct $direct, to blocked $blocked" \
+    "stand-in served $served, SYN to the stand-in $syn" >"$out.txt"
+  { [ "$ok" = 20 ] && [ "$direct" -ge 20 ] && [ "$blocked" = 0 ] && [ "$served" -ge 20 ] && [ "$syn" -ge 20 ]; } ||
+    fail "VT-27 $shape: not every connection was forwarded ($(paste -sd ';' "$out.txt"))"
+}
+
+# VT-28: cross-authority probes over the node, SNI target.example with
+# Host: other.example over HTTP/1.1 and :authority other.example over h2 (curl
+# turns the Host header into :authority, detailed design 10, DO-8). With the
+# stand-in routing by SNI, the client must not get other.example's content.
+# Against the stand-in routing by Host the probes are only recorded: they show
+# that the boundary does not look inside TLS (detailed design 17).
+phase_vt28() {
+  local fwd mode proto
+  fwd="$(xray_tag 20443)"
+  for mode in strict cross; do
+    standin "$mode"
+    edge_begin "vt28-$mode"
+    for proto in http1.1 http2; do
+      client_curl "vt28-$mode-$proto" "--$proto" --resolve "target.example:443:$NODE_IP" -H 'Host: other.example' \
+        https://target.example/
+    done
+    edge_end
+    # The driver itself: both probes went over the forwarder to the stand-in
+    # with SNI target.example and authority other.example.
+    { grep -qF "[$fwd -> direct]" "$phase_dir/vt28-$mode-access.txt" &&
+      jq -se 'any(.[]; .sni == "target.example" and any(.requests[]; .proto == "http/1.1" and .host == "other.example"))
+        and any(.[]; .sni == "target.example" and any(.requests[]; .proto == "h2" and .authority == "other.example"))' \
+        "$phase_dir/vt28-$mode-standin.jsonl" >/dev/null; } ||
+      { standin strict; driver_fail "VT-28 $mode: the probes did not reach the stand-in as intended"; }
+    for proto in http1.1 http2; do
+      printf '%s %s: %s, body %s\n' "$mode" "$proto" "$(cat "$phase_dir/vt28-$mode-$proto.result")" \
+        "$(head -c 64 "$phase_dir/vt28-$mode-$proto.body" | tr -c '[:print:]' ' ')"
+    done >>"$phase_dir/vt28.txt"
+  done
+  standin strict
+  for proto in http1.1 http2; do
+    ! grep -q 'stand-in other.example' "$phase_dir/vt28-strict-$proto.body" ||
+      fail "VT-28: $proto with Host other.example got other.example's content from the stand-in routing by SNI"
+  done
+}
+
+# vt29_side NAME ADDRESS [PREFIX...]: the handshake and the response of the
+# stand-in at ADDRESS:443 with SNI target.example, as key=value lines in
+# NAME.txt; PREFIX runs the commands in a namespace.
+vt29_side() {
+  local name="$1" addr="$2" out="$phase_dir/vt29-$1" code version size connect app first
+  shift 2
+  "$@" timeout 15 openssl s_client -connect "$addr:443" -servername target.example -alpn h2,http/1.1 \
+    </dev/null >"$out.tls" 2>&1 || true
+  read -r code version size connect app first < <("$@" curl -q -sS --noproxy '*' --max-time 20 \
+    --resolve "target.example:443:$addr" -o "$out.body" \
+    -w '%{http_code} %{http_version} %{size_download} %{time_connect} %{time_appconnect} %{time_starttransfer}\n' \
+    https://target.example/ 2>"$out.curl-err" || true)
+  {
+    printf 'protocol=%s\n' "$(sed -n 's/^ *Protocol *: *//p' "$out.tls" | head -1)"
+    printf 'cipher=%s\n' "$(sed -n 's/^New, [^,]*, Cipher is //p' "$out.tls" | head -1)"
+    printf 'group=%s\n' "$(sed -n 's/^Negotiated TLS1.3 group: //p' "$out.tls" | head -1)"
+    printf 'alpn=%s\n' "$(sed -n 's/^ALPN protocol: //p' "$out.tls" | head -1)"
+    printf 'verify=%s\n' "$(sed -n 's/^Verify return code: //p' "$out.tls" | head -1)"
+    printf 'certificate_sha256=%s\n' "$(openssl x509 -noout -fingerprint -sha256 <"$out.tls" 2>/dev/null | sed 's/.*=//')"
+    printf 'http_status=%s\n' "${code-}"
+    printf 'http_version=%s\n' "${version-}"
+    printf 'body_bytes=%s\n' "${size-}"
+    printf 'body_sha256=%s\n' "$(sha256sum <"$out.body" 2>/dev/null | cut -d' ' -f1)"
+  } >"$out.txt"
+  printf '%s: connect %s s, TLS done %s s, first byte %s s\n' "$name" "${connect-}" "${app-}" "${first-}" \
+    >>"$phase_dir/vt29-timings.txt"
+}
+
+# VT-29: the stand-in reached from the guest directly and over the node's 443,
+# both with SNI target.example, compared. Only recorded (verification plan
+# VT-29); the phase fails only if a side could not be measured.
+phase_vt29() {
+  local key d n
+  vt29_side direct "$STANDIN"
+  vt29_side node "$NODE_IP" ip netns exec vpsns-client
+  for key in protocol cipher group alpn verify certificate_sha256 http_status http_version body_bytes body_sha256; do
+    d="$(sed -n "s/^$key=//p" "$phase_dir/vt29-direct.txt")"
+    n="$(sed -n "s/^$key=//p" "$phase_dir/vt29-node.txt")"
+    if [ "$d" = "$n" ]; then
+      printf '%s: same (%s)\n' "$key" "$d"
+    else
+      printf '%s: direct %s, node %s\n' "$key" "$d" "$n"
+    fi
+  done >"$phase_dir/vt29.txt"
+  for d in direct node; do
+    { grep -qx 'protocol=TLSv1.3' "$phase_dir/vt29-$d.txt" && grep -qx 'http_status=200' "$phase_dir/vt29-$d.txt"; } ||
+      fail "VT-29: the $d side could not be measured"
+  done
 }
 
 main "$@"
