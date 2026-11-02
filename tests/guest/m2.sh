@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck source-path=SCRIPTDIR
 # Guest side of the M2 VM tests (detailed design 9, 19; verification plan
-# VT-10 to VT-13, VT-15 to VT-18, VT-20 to VT-31, VT-70, VT-71). Sources
+# VT-10 to VT-13, VT-15 to VT-18, VT-20 to VT-32, VT-70, VT-71). Sources
 # tests/guest/m1.sh for its helpers and the phases of the main configuration; tests/vm.py runs one phase per SSH session. The
 # guest is the main configuration with the namespaces, the stand-in and a
 # fresh target-check result of the m1 phase network and the phase m2-prep.
@@ -1144,20 +1144,24 @@ readonly SUB_PORT=2096
 # stand-in through, ahead of the template's geoip:private block.
 readonly STANDIN_RULE='{"action":"allow","ip":["198.51.100.2"]}'
 
-phase_sni_deploy() {
+# full_deploy NAME INPUT: deploy steps 1 to 7; without step 8 (M3) the run
+# ends with exit 1 after step 7.
+full_deploy() {
   settle
   keeper_start
-  deploy_yes sni-deploy "$TOOL" deploy --input "$M2_INPUT"
+  deploy_yes "$1" "$TOOL" deploy --input "$2"
   keeper_stop
   collect_markers
-  expect_rc sni-deploy 1
-  expect_clean sni-deploy
-  expect_err sni-deploy '[x] 第 1～7 步完成'
-  expect_fails sni-deploy
-  expect_no_secret sni-deploy
+  expect_rc "$1" 1
+  expect_clean "$1"
+  expect_err "$1" '[x] 第 1～7 步完成'
+  expect_fails "$1"
+  expect_no_secret "$1"
   wait_xui_stable
   scan_markers
 }
+
+phase_sni_deploy() { full_deploy sni-deploy "$M2_INPUT"; }
 
 # xray_tag PORT: the tag of the inbound on PORT in the generated config.
 xray_tag() {
@@ -1302,17 +1306,18 @@ edge_blocked() {
   [ ! -s "$phase_dir/$1-syn.txt" ] || fail "$1: a SYN went to the stand-in"
 }
 
-# The test-environment deviations, through the panel with
-# the handoff credentials (verification plan 3.4): the stand-in exception in
-# the direct outbound (3.6) and the Xray access log (4.4). Saving the template
+# sni_prep RULE: the test-environment deviations, through the panel with
+# the handoff credentials (verification plan 3.4): the stand-in exception RULE
+# first in the finalRules of direct and, with FR-13, of ai-ipv6, so that the
+# two stay equal (3.6); and the Xray access log (4.4). Saving the template
 # restarts Xray.
-phase_sni_prep() {
-  local fwd reality
+sni_prep() {
+  local fwd reality rule="$1"
   grep -qE '^443/tcp +ALLOW' <(ufw status) || fail 'UFW does not allow 443/tcp'
   panel_login
   template_edit '.log.access = "'"$XRAY_ACCESS"'"
-    | .outbounds |= map(if .tag == "direct" then .settings.finalRules = ['"$STANDIN_RULE"'] + .settings.finalRules
-      else . end)'
+    | .outbounds |= map(if .tag == "direct" or .tag == "ai-ipv6"
+      then .settings.finalRules = ['"$rule"'] + .settings.finalRules else . end)'
   wait_port 443 exposed
   wait_port 20443 loopback
   wait_xui_stable
@@ -1320,15 +1325,16 @@ phase_sni_prep() {
     [ ! -e "$XRAY_ACCESS" ] || break
     sleep 1
   done
-  jq -e --arg a "$XRAY_ACCESS" --argjson r "$STANDIN_RULE" '.log.access == $a
-    and ([.outbounds[] | select(.tag == "direct") | .settings.finalRules[0]] == [$r])' "$XRAY_CONFIG" >/dev/null ||
+  jq -e --arg a "$XRAY_ACCESS" --argjson r "$rule" '.log.access == $a
+    and ([.outbounds[] | select(.tag == "direct") | .settings.finalRules[0]] == [$r])
+    and all(.outbounds[] | select(.tag == "ai-ipv6"); .settings.finalRules[0] == $r)' "$XRAY_CONFIG" >/dev/null ||
     fail 'the generated Xray config does not have the access log and the stand-in exception'
   [ -f "$XRAY_ACCESS" ] || fail "Xray did not create $XRAY_ACCESS"
   reality="$(xray_tag 443)"
   fwd="$(xray_tag 20443)"
   [ -n "$reality" ] && [ -n "$fwd" ] || fail 'no single inbound on 443 and on 20443'
   printf '%s\n' "REALITY inbound tag: $reality" "forwarder tag: $fwd" \
-    'deviation: the direct outbound lets 198.51.100.2 through first (verification plan 3.6)' \
+    "deviation: the finalRules of direct, and of ai-ipv6 if present, begin with $rule (verification plan 3.6)" \
     "deviation: the Xray access log is on at $XRAY_ACCESS (verification plan 4.4)" \
     'deviation: UFW allows 443/tcp, added with vps-hardening ports (verification plan 3.3)' \
     'deviation: Mihomo runs in global mode with only the proxy of the subscription (verification plan 3.6)' \
@@ -1343,6 +1349,8 @@ phase_sni_prep() {
   capture client-443 ip netns exec vpsns-client timeout 5 bash -c "exec 3<>/dev/tcp/$NODE_IP/443"
   expect_rc client-443 0
 }
+
+phase_sni_prep() { sni_prep "$STANDIN_RULE"; }
 
 # VT-20: alice's Mihomo subscription carries Vision, the chrome fingerprint and
 # ML-KEM; with it as is, Mihomo reaches probe.example over the node, in HTTP
@@ -1650,7 +1658,7 @@ geo_pick() {
 # route_test CASE INBOUND_TAG FIELD VALUE: one query to the panel's route test
 # (POST panel/api/xray/routeTest, detailed design 19), which asks the running
 # core which outbound it would pick, without sending traffic. FIELD is domain
-# or ip. The answer goes to vt30.jsonl. The form ends without a newline: the
+# or ip. The answer goes to routes.jsonl. The form ends without a newline: the
 # panel takes form values as sent, and a newline after the last one would
 # make the tag one that no rule names.
 route_test() {
@@ -1658,13 +1666,13 @@ route_test() {
     >"$PRIVATE/route-test-form"
   panel_api POST xray/routeTest "$PRIVATE/route-test-form" application/x-www-form-urlencoded
   jq -c --arg c "$1" --arg f "$3" --arg v "$4" '{case: $c, query: "\($f) \($v)", matched: .obj.matched,
-    outboundTag: .obj.outboundTag}' "$PANEL_OUT" >>"$phase_dir/vt30.jsonl"
+    outboundTag: .obj.outboundTag}' "$PANEL_OUT" >>"$phase_dir/routes.jsonl"
 }
 
 # route_is CASE MATCHED TAG: the answer of that case.
 route_is() {
   jq -se --arg c "$1" --argjson m "$2" --arg t "$3" '[.[] | select(.case == $c)]
-    | length == 1 and .[0].matched == $m and .[0].outboundTag == $t' "$phase_dir/vt30.jsonl" >/dev/null
+    | length == 1 and .[0].matched == $m and .[0].outboundTag == $t' "$phase_dir/routes.jsonl" >/dev/null
 }
 
 # VT-30: from the REALITY inbound, the geosite:cn domain and the geoip:cn
@@ -1680,14 +1688,14 @@ phase_vt30() {
   cn_ipv4="$(geo_pick ip cn)"
   (cd "$GEO_DIR" && sha256sum geosite.dat geoip.dat) >"$phase_dir/vt30-geodata.txt"
   panel_login
-  rm -f "$phase_dir/vt30.jsonl"
+  rm -f "$phase_dir/routes.jsonl"
   route_test cn-domain "$reality" domain "$cn_domain"
   route_test cn-ipv4 "$reality" ip "$cn_ipv4"
   route_test control "$reality" domain probe.example
   route_test forwarder-target "$fwd" domain target.example
   route_test forwarder-other "$fwd" domain other.example
   jq -r '"\(.case) (\(.query)): matched \(.matched), outbound \(if .outboundTag == "" then "none" else .outboundTag end)"' \
-    "$phase_dir/vt30.jsonl" >"$phase_dir/vt30.txt"
+    "$phase_dir/routes.jsonl" >"$phase_dir/vt30.txt"
   printf 'first outbound of the generated config: %s\n' "$(jq -r '.outbounds[0].tag' "$XRAY_CONFIG")" \
     >>"$phase_dir/vt30.txt"
   route_is cn-domain true blocked || fail "VT-30: $cn_domain from the REALITY inbound is not routed to blocked"
@@ -1725,6 +1733,299 @@ phase_vt31() {
     fail 'VT-31: http://probe.example/ over the node failed'
   grep -qF "accepted tcp:probe.example:80 [$reality >> direct]" "$phase_dir/vt31-access.txt" ||
     fail 'VT-31: the access log does not show probe.example from the REALITY inbound to direct'
+}
+
+# ---------------------------------------------------------------------------
+# FR-13 (detailed design 9.9; verification plan 3.3, 3.6, 4.5): the overlay
+# with an IPv6 /64 on the stand-in's veth, deployed with FR-13 enabled; the
+# dual-stack stand-in; the egress isolation; VT-32.
+
+readonly GUEST6=2001:db8:0:6::1
+readonly STANDIN6=2001:db8:0:6::2
+readonly GUEST6_EXTRA=2001:db8:0:6::3
+readonly UDP_ECHO_PORT=7
+readonly FR13_INPUT="$PRIVATE/fr13.input"
+# The exception of verification plan 3.6 on this overlay: both stand-in
+# addresses, first in the finalRules of direct and of ai-ipv6.
+readonly STANDIN_RULE6='{"action":"allow","ip":["198.51.100.2","2001:db8:0:6::2"]}'
+readonly HOSTS_MARK='# vps-fr13'
+readonly ISOLATION_CHAIN=VPS-ISOLATION
+
+# IPv6 on the stand-in's veth only: no router advertisements, no temporary
+# addresses, no duplicate address detection, so that the one global address
+# is usable at once. The guest's IPv6 default route points into the stand-in
+# namespace; the client namespace stays IPv4 only (verification plan 3.3).
+phase_fr13_net() {
+  local conf
+  for conf in accept_ra=0 autoconf=0 use_tempaddr=0 disable_ipv6=0; do
+    sysctl -q -w "net.ipv6.conf.vps-standin0.$conf"
+    ip netns exec vpsns-standin sysctl -q -w "net.ipv6.conf.eth0.$conf"
+  done
+  ip netns exec vpsns-standin sysctl -q -w net.ipv6.conf.all.disable_ipv6=0
+  ip -6 addr add "$GUEST6/64" dev vps-standin0 nodad
+  ip -n vpsns-standin -6 addr add "$STANDIN6/64" dev eth0 nodad
+  ip -6 route add default via "$STANDIN6" dev vps-standin0
+  capture ping6 ping -6 -c 1 -W 5 "$STANDIN6"
+  expect_rc ping6 0
+  { ip -br addr; echo '== -6 route'; ip -6 route; } >"$phase_dir/addresses.txt"
+  [ "$(vps_fn ipv6_egress_facts)" = '1 0 1' ] || fail 'the guest does not have exactly one usable IPv6 address and route'
+}
+
+phase_fr13_deploy() {
+  write_input "$FR13_INPUT" ipv6_ai_egress=on
+  full_deploy fr13-deploy "$FR13_INPUT"
+}
+
+# fr13_hosts NAME [4|6|ADDRESS]...: /etc/hosts maps NAME to the stand-in's
+# IPv4 address, its IPv6 address, another address, or, with nothing given,
+# to nothing; the lines carry HOSTS_MARK. Go reads the hosts file again at
+# most every five seconds, so the core sees the change after the wait.
+fr13_hosts() {
+  local name="$1" kind
+  grep -vF -- " $name $HOSTS_MARK" /etc/hosts >"$PRIVATE/hosts.new" || true
+  for kind in "${@:2}"; do
+    case "$kind" in
+      4) printf '%s %s %s\n' "$STANDIN" "$name" "$HOSTS_MARK" ;;
+      6) printf '%s %s %s\n' "$STANDIN6" "$name" "$HOSTS_MARK" ;;
+      *) printf '%s %s %s\n' "$kind" "$name" "$HOSTS_MARK" ;;
+    esac >>"$PRIVATE/hosts.new"
+  done
+  cat "$PRIVATE/hosts.new" >/etc/hosts
+  sleep 6
+}
+
+# The dual-stack stand-in (verification plan 3.6), serving the two test
+# domains, and the deviations with both stand-in addresses.
+phase_fr13_prep() {
+  local openai anthropic
+  openai="$(geo_pick site openai)"
+  anthropic="$(geo_pick site anthropic)"
+  standin strict --listen6 "$STANDIN6" --udp-port "$UDP_ECHO_PORT" --host "$openai" --host "$anthropic"
+  sni_prep "$STANDIN_RULE6"
+  capture standin-http4 curl -q -fsS --noproxy '*' --max-time 10 -o /dev/null -H 'Host: probe.example' \
+    "http://$STANDIN/"
+  expect_rc standin-http4 0
+  capture standin-http6 curl -q -fsS --noproxy '*' --max-time 10 -o /dev/null -H 'Host: probe.example' \
+    "http://[$STANDIN6]/"
+  expect_rc standin-http6 0
+  printf '%s\n' 'deviation: new connections of the guest through the user-network uplink are rejected and counted during the FR-13 cases (verification plan 3.6)' \
+    >>"$phase_dir/deviations.txt"
+}
+
+# isolation_on: verification plan 3.6. New connections that the guest opens
+# through the user-network uplink, DNS queries included, are logged, rejected
+# and counted, port 53 apart from the rest. Connections the runner forwards
+# in are not new in that direction. Zeroes the counters.
+ISOLATION_SINCE=''
+isolation_on() {
+  local up cmd
+  up="$(ip -j -4 route show default | jq -r 'if length == 1 then .[0].dev else empty end')"
+  [ -n "$up" ] || driver_fail 'no single IPv4 default route for the egress isolation'
+  for cmd in iptables ip6tables; do
+    if "$cmd" -w -N "$ISOLATION_CHAIN" 2>/dev/null; then
+      "$cmd" -w -A "$ISOLATION_CHAIN" -j LOG --log-prefix 'vps-isolation: '
+      "$cmd" -w -A "$ISOLATION_CHAIN" -p udp --dport 53 -j REJECT
+      "$cmd" -w -A "$ISOLATION_CHAIN" -p tcp --dport 53 -j REJECT
+      "$cmd" -w -A "$ISOLATION_CHAIN" -j REJECT
+      "$cmd" -w -I OUTPUT 1 -o "$up" -m conntrack --ctstate NEW -j "$ISOLATION_CHAIN"
+    fi
+    "$cmd" -w -Z "$ISOLATION_CHAIN"
+  done
+  ISOLATION_SINCE="$(date '+%Y-%m-%d %H:%M:%S')"
+}
+
+# isolation_counts NAME: "DNS OTHER" rejected since isolation_on, written with
+# the logged packets to NAME-isolation.txt.
+isolation_counts() {
+  local cmd dns=0 other=0 packets
+  for cmd in iptables ip6tables; do
+    mapfile -t packets < <("$cmd" -w -L "$ISOLATION_CHAIN" -v -x -n | awk 'NR > 2 { print $1 }')
+    [ "${#packets[@]}" = 4 ] || driver_fail "the $cmd isolation chain does not have four rules"
+    dns=$((dns + packets[1] + packets[2]))
+    other=$((other + packets[3]))
+  done
+  {
+    printf 'rejected since %s: DNS %s, other %s\n' "$ISOLATION_SINCE" "$dns" "$other"
+    journalctl -q -k --since "$ISOLATION_SINCE" -g 'vps-isolation: ' -o short-iso 2>/dev/null || true
+  } >"$phase_dir/$1-isolation.txt"
+  printf '%s %s\n' "$dns" "$other"
+}
+
+# fr13_begin NAME / fr13_end: edge_begin and edge_end for the dual-stack
+# stand-in: the new access log lines and stand-in records, and on the
+# guest's veth towards the stand-in the SYNs and UDP datagrams to each of its
+# two addresses. tcpdump's tcp[] does not reach into IPv6, so SYNs are taken
+# from the decoded flags.
+fr13_begin() {
+  EDGE_NAME="$1"
+  EDGE_ACCESS="$(stat -c %s "$XRAY_ACCESS")"
+  EDGE_STANDIN="$(stat -c %s "$EVIDENCE/standin/connections.jsonl")"
+  tcpdump -Z root -i vps-standin0 -nn -U -w "$PRIVATE/edge-$1.pcap" "host $STANDIN or host $STANDIN6" \
+    2>"$PRIVATE/edge-$1.err" &
+  EDGE_PID=$!
+  for _ in $(seq 50); do
+    ! grep -q 'listening on' "$PRIVATE/edge-$1.err" || return 0
+    sleep 0.2
+  done
+  driver_fail 'tcpdump did not start'
+}
+
+fr13_end() {
+  local n="$EDGE_NAME" kind address
+  sleep 3
+  kill -INT "$EDGE_PID"
+  wait "$EDGE_PID" || true
+  [ "$(stat -c %s "$XRAY_ACCESS")" -ge "$EDGE_ACCESS" ] || driver_fail "$n: the access log shrank during the case"
+  tail -c "+$((EDGE_ACCESS + 1))" "$XRAY_ACCESS" >"$phase_dir/$n-access.txt"
+  tail -c "+$((EDGE_STANDIN + 1))" "$EVIDENCE/standin/connections.jsonl" | grep -v '"event"' \
+    >"$phase_dir/$n-standin.jsonl" || true
+  for kind in 4 6; do
+    address="$STANDIN"
+    [ "$kind" = 4 ] || address="$STANDIN6"
+    tcpdump -nn -tt -r "$PRIVATE/edge-$n.pcap" "tcp and dst host $address" 2>/dev/null |
+      awk '/Flags \[S\],/' >"$phase_dir/$n-syn$kind.txt"
+    tcpdump -nn -tt -r "$PRIVATE/edge-$n.pcap" "udp and dst host $address" >"$phase_dir/$n-udp$kind.txt" 2>/dev/null
+  done
+  printf 'access log %s lines, stand-in %s records; SYN to IPv4 %s, to IPv6 %s; UDP to IPv4 %s, to IPv6 %s\n' \
+    "$(grep -c . "$phase_dir/$n-access.txt")" "$(grep -c . "$phase_dir/$n-standin.jsonl")" \
+    "$(grep -c . "$phase_dir/$n-syn4.txt")" "$(grep -c . "$phase_dir/$n-syn6.txt")" \
+    "$(grep -c . "$phase_dir/$n-udp4.txt")" "$(grep -c . "$phase_dir/$n-udp6.txt")" >"$phase_dir/$n-edge.txt"
+}
+
+# fr13_get CASE NAME COUNT: COUNT plain HTTP requests for NAME over the node
+# (Mihomo in global mode, as in VT-20); writes CASE.txt with one line per
+# request and sets FR13_OK to how many got 200 with the stand-in's body for
+# NAME.
+FR13_OK=0
+fr13_get() {
+  local i
+  FR13_OK=0
+  : >"$phase_dir/$1.txt"
+  for i in $(seq "$3"); do
+    client_curl "$1-$i" -x http://127.0.0.1:7890 "http://$2/"
+    printf '%s: curl exit %s, HTTP %s\n' "$i" "$CURL_RC" "$CURL_HTTP" >>"$phase_dir/$1.txt"
+    if [ "$CURL_RC" = 0 ] && [ "$CURL_HTTP" = 200 ] && grep -qxF "stand-in $2" "$phase_dir/$1-$i.body"; then
+      FR13_OK=$((FR13_OK + 1))
+    fi
+  done
+}
+
+# fr13_tcp_ipv6 CASE NAME COUNT [SOURCE]: the judgment of VT-32 on one case:
+# the stand-in got exactly COUNT plain HTTP connections for NAME, all on its
+# IPv6 address and from SOURCE (default the guest's first IPv6 address); no
+# SYN went to its IPv4 address; the access log routed each from the REALITY
+# inbound to ai-ipv6.
+fr13_tcp_ipv6() {
+  local reality source="${4:-$GUEST6}"
+  reality="$(xray_tag 443)"
+  jq -se --arg h "$2" --argjson c "$3" --arg l "$STANDIN6:80" --arg s "$source" '[.[] | select(.udp | not)]
+    | length == $c and all(.[]; .plain and .local == $l and (.peer | sub(":[0-9]+$"; "")) == $s
+      and .requests[0].host == $h and .requests[0].status == 200)' "$phase_dir/$1-standin.jsonl" >/dev/null ||
+    fail "VT-32 $1: the stand-in did not get exactly $3 connections for $2 on $STANDIN6 from $source"
+  [ ! -s "$phase_dir/$1-syn4.txt" ] || fail "VT-32 $1: a SYN went to the stand-in's IPv4 address"
+  [ "$(grep -cF "accepted tcp:$2:80 [$reality -> ai-ipv6]" "$phase_dir/$1-access.txt")" = "$3" ] ||
+    fail "VT-32 $1: the access log does not route each request for $2 from the REALITY inbound to ai-ipv6"
+}
+
+# VT-32, TCP. The route test first; then the two test domains on both
+# stand-in addresses, ten requests each; one of them on the IPv6 address
+# only, ten requests; check; a second address on the /64, check and one
+# request. The egress isolation is on throughout; tests/vm.py judges the two
+# check results.
+phase_vt32() {
+  local reality fwd openai anthropic seen
+  reality="$(xray_tag 443)"
+  fwd="$(xray_tag 20443)"
+  openai="$(geo_pick site openai)"
+  anthropic="$(geo_pick site anthropic)"
+  printf '%s\n' "geosite:openai: $openai" "geosite:anthropic: $anthropic" >"$phase_dir/vt32-domains.txt"
+  stop_time_sync
+  isolation_on
+  panel_login
+  rm -f "$phase_dir/routes.jsonl"
+  route_test openai "$reality" domain "$openai"
+  route_test anthropic "$reality" domain "$anthropic"
+  route_test forwarder "$fwd" domain "$openai"
+  jq -r '"\(.case) (\(.query)): matched \(.matched), outbound \(if .outboundTag == "" then "none" else .outboundTag end)"' \
+    "$phase_dir/routes.jsonl" >"$phase_dir/vt32-routes.txt"
+  route_is openai true ai-ipv6 || fail "VT-32: $openai from the REALITY inbound is not routed to ai-ipv6"
+  route_is anthropic true ai-ipv6 || fail "VT-32: $anthropic from the REALITY inbound is not routed to ai-ipv6"
+  route_is forwarder true blocked || fail "VT-32: $openai from the forwarder is not routed to blocked"
+
+  fr13_hosts "$openai" 4 6
+  fr13_hosts "$anthropic" 4 6
+  mihomo_up main 7890
+  fr13_begin vt32-dual-openai
+  fr13_get vt32-dual-openai "$openai" 10
+  fr13_end
+  [ "$FR13_OK" = 10 ] || fail "VT-32: $FR13_OK of 10 requests for $openai (both addresses) succeeded"
+  fr13_tcp_ipv6 vt32-dual-openai "$openai" 10
+  fr13_begin vt32-dual-anthropic
+  fr13_get vt32-dual-anthropic "$anthropic" 10
+  fr13_end
+  [ "$FR13_OK" = 10 ] || fail "VT-32: $FR13_OK of 10 requests for $anthropic (both addresses) succeeded"
+  fr13_tcp_ipv6 vt32-dual-anthropic "$anthropic" 10
+
+  fr13_hosts "$anthropic" 6
+  fr13_begin vt32-v6only
+  fr13_get vt32-v6only "$anthropic" 10
+  fr13_end
+  [ "$FR13_OK" = 10 ] || fail "VT-32: $FR13_OK of 10 requests for $anthropic (IPv6 only) succeeded"
+  fr13_tcp_ipv6 vt32-v6only "$anthropic" 10
+  mihomo_log main
+
+  m2_check check
+  [ "$(isolation_counts vt32)" = '0 0' ] || fail 'VT-32: the egress isolation rejected connections of the guest'
+
+  ip -6 addr add "$GUEST6_EXTRA/64" dev vps-standin0 nodad
+  m2_check check-extra
+  fr13_begin vt32-extra
+  fr13_get vt32-extra "$openai" 1
+  fr13_end
+  [ "$FR13_OK" = 1 ] || fail "VT-32: the request for $openai after the second address failed"
+  seen="$(jq -rs '[.[] | select(.udp | not) | .peer | sub(":[0-9]+$"; "")] | unique | join(" ")' \
+    "$phase_dir/vt32-extra-standin.jsonl")"
+  printf 'source address seen by the stand-in with two addresses on the /64: %s\n' "$seen" \
+    >"$phase_dir/vt32-extra.txt"
+  case "$seen" in
+    "$GUEST6" | "$GUEST6_EXTRA") fr13_tcp_ipv6 vt32-extra "$openai" 1 "$seen" ;;
+    *) fail "VT-32: after the second address the stand-in saw the source $seen" ;;
+  esac
+  [ "$(isolation_counts vt32-extra)" = '0 0' ] ||
+    fail 'VT-32: the egress isolation rejected connections of the guest after the second address'
+}
+
+# VT-32, UDP: tests/guest/udpsend.py sends ten datagrams to each test domain,
+# on both stand-in addresses, as a domain through Mihomo's SOCKS5 UDP to the
+# stand-in's echo port. Verification plan 4.5: they reach only the IPv6
+# address, and no UDP goes to the IPv4 address. The evidence also keeps what
+# the access log says the node received.
+phase_vt32_udp() {
+  local openai anthropic name n
+  openai="$(geo_pick site openai)"
+  anthropic="$(geo_pick site anthropic)"
+  stop_time_sync
+  isolation_on
+  fr13_hosts "$openai" 4 6
+  fr13_hosts "$anthropic" 4 6
+  mihomo_up main 7890
+  fr13_begin vt32-udp
+  for name in "$openai" "$anthropic"; do
+    ip netns exec vpsns-client python3 "$BUNDLE/tests/guest/udpsend.py" --proxy 127.0.0.1:7890 --host "$name" \
+      --port "$UDP_ECHO_PORT" --count 10 >>"$phase_dir/vt32-udp.jsonl"
+  done
+  fr13_end
+  mihomo_log main
+  n="$(isolation_counts vt32-udp)"
+  for name in "$openai" "$anthropic"; do
+    jq -se --arg h "$name" '[.[] | select(.host == $h)] | length == 1 and .[0].sent == 10 and .[0].echoed == 10' \
+      "$phase_dir/vt32-udp.jsonl" >/dev/null || fail "VT-32 UDP: not all ten datagrams to $name came back"
+  done
+  jq -se --arg l "$STANDIN6:$UDP_ECHO_PORT" '[.[] | select(.udp)] | length == 20 and all(.[]; .local == $l)' \
+    "$phase_dir/vt32-udp-standin.jsonl" >/dev/null ||
+    fail "VT-32 UDP: the stand-in did not get the twenty datagrams on $STANDIN6 alone"
+  [ ! -s "$phase_dir/vt32-udp-udp4.txt" ] || fail "VT-32 UDP: a datagram went to the stand-in's IPv4 address"
+  [ "$n" = '0 0' ] || fail 'VT-32 UDP: the egress isolation rejected connections of the guest'
 }
 
 main "$@"

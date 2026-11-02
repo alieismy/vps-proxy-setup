@@ -18,11 +18,18 @@ that target-check reads, so the bodies compare equal only if it reads less.
 --delay SECONDS holds every HTTP response that long; --arrivals FILE gets a
 line as each request arrives, before that wait, so that a client can be
 interrupted while it waits for the response.
+--host NAME (repeatable) adds a host whose body is "stand-in NAME"; the FR-13
+cases use it for the domains they pick at run time (verification plan 3.6).
+--listen6 ADDRESS also serves the plain HTTP port on that IPv6 address, and
+--udp-port PORT echoes UDP datagrams on --listen and on --listen6: the
+dual-stack stand-in of the FR-13 cases.
 
 Every TCP connection is logged as one JSON line: time, peer, SNI, ALPN and,
 for each request, the protocol, the Host or :authority received, the path,
 the status and whether the body was sent to the end. The authority actually
-received is the evidence of DO-8.
+received is the evidence of DO-8. A connection also logs its local address,
+and every UDP datagram one line with the local and the peer address and its
+size: the address family on the stand-in's side is evidence for FR-13.
 """
 import argparse
 import json
@@ -59,8 +66,9 @@ class StandIn:
         # Large: the host name sits right at PREFIX (one byte before it with
         # --early), and the two names differ in their first byte.
         split = PREFIX - 1 if args.early else PREFIX
+        bodies = dict(BODIES, **{name: f'stand-in {name}\n'.encode() for name in args.host})
         self.bodies = {name: b'.' * split + name.encode() + b'.' * LARGE if args.large else body
-                       for name, body in BODIES.items()}
+                       for name, body in bodies.items()}
         self.log_path = args.log
         self.log_lock = threading.Lock()
         self.sni = {}
@@ -174,8 +182,9 @@ class StandIn:
                 conn.sendall(out)
 
     def serve(self, raw, peer, plain=False):
+        local = raw.getsockname()
         record = {'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'mode': self.mode,
-                  'peer': f'{peer[0]}:{peer[1]}', 'requests': []}
+                  'peer': f'{peer[0]}:{peer[1]}', 'local': f'{local[0]}:{local[1]}', 'requests': []}
         if self.large:
             record['large'] = True
         conn = None
@@ -202,6 +211,14 @@ class StandIn:
             (conn or raw).close()
             self.log(record)
 
+    def echo(self, sock):
+        local = sock.getsockname()
+        while True:
+            data, peer = sock.recvfrom(65535)
+            self.log({'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'udp': True,
+                      'local': f'{local[0]}:{local[1]}', 'peer': f'{peer[0]}:{peer[1]}', 'size': len(data)})
+            sock.sendto(data, peer)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -213,6 +230,9 @@ def main():
     parser.add_argument('--delay', type=float, default=0, help='seconds to hold every HTTP response')
     parser.add_argument('--arrivals', help='file that gets a line as each request arrives')
     parser.add_argument('--listen', default='198.51.100.2')
+    parser.add_argument('--listen6', help='also serve plain HTTP, and UDP with --udp-port, on this IPv6 address')
+    parser.add_argument('--udp-port', type=int, help='echo UDP datagrams on this port')
+    parser.add_argument('--host', action='append', default=[], help='another host, body "stand-in HOST"')
     parser.add_argument('--port', type=int, default=443)
     parser.add_argument('--http-port', type=int, default=80, help='plain HTTP/1.1, routed by Host')
     parser.add_argument('--cert', required=True, help='leaf certificate followed by the test CA')
@@ -220,8 +240,15 @@ def main():
     parser.add_argument('--log', required=True)
     args = parser.parse_args()
     server = StandIn(args)
-    plain = socket.create_server((args.listen, args.http_port), backlog=64)
-    with socket.create_server((args.listen, args.port), backlog=64) as sock, plain:
+    addresses = [(socket.AF_INET, args.listen)] + ([(socket.AF_INET6, args.listen6)] if args.listen6 else [])
+    plains = [socket.create_server((address, args.http_port), family=family, backlog=64)
+              for family, address in addresses]
+    udps = []
+    for family, address in addresses if args.udp_port else []:
+        udp = socket.socket(family, socket.SOCK_DGRAM)
+        udp.bind((address, args.udp_port))
+        udps.append(udp)
+    with socket.create_server((args.listen, args.port), backlog=64) as sock:
         server.log({'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'mode': args.mode, 'event': 'start'})
 
         def accept(listener, is_plain):
@@ -229,7 +256,10 @@ def main():
                 raw, peer = listener.accept()
                 threading.Thread(target=server.serve, args=(raw, peer, is_plain), daemon=True).start()
 
-        threading.Thread(target=accept, args=(plain, True), daemon=True).start()
+        for plain in plains:
+            threading.Thread(target=accept, args=(plain, True), daemon=True).start()
+        for udp in udps:
+            threading.Thread(target=server.echo, args=(udp,), daemon=True).start()
         accept(sock, False)
 
 

@@ -29,6 +29,11 @@ from a local asset directory. Suites:
   m2-sni        one guest: a complete deploy, 443/tcp added with
                 vps-hardening ports and confirmed from a new session, the
                 test deviations, then VT-20 to VT-31 in turn.
+  m2-fr13       one guest with an IPv6 /64 on the stand-in's veth: a
+                complete deploy with FR-13 enabled, 443/tcp added as in
+                m2-sni, the dual-stack stand-in and the deviations, then
+                VT-32 with the egress isolation; its two check results are
+                judged here.
 
 tests/guest/m1.sh is the guest side of M1 and judges everything except
 VT-71; tests/guest/m2.sh, which sources it, the guest side of M2.
@@ -96,14 +101,13 @@ FIXTURES = {
 # Further fixtures of one suite. Mihomo, the test client (VO-3): the newest
 # release, v1.19.33 of 2026-10-21; the build for amd64 without newer
 # instruction sets, digest from the release asset.
-SUITE_FIXTURES = {
-    'm2-sni': {
-        'mihomo-linux-amd64-compatible-v1.19.33.gz': (
-            'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/'
-            'mihomo-linux-amd64-compatible-v1.19.33.gz',
-            '386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6'),
-    },
+MIHOMO = {
+    'mihomo-linux-amd64-compatible-v1.19.33.gz': (
+        'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/'
+        'mihomo-linux-amd64-compatible-v1.19.33.gz',
+        '386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6'),
 }
+SUITE_FIXTURES = {'m2-sni': MIHOMO, 'm2-fr13': MIHOMO}
 # The M1 baseline of check on S1 (detailed design 9.5, with the items of
 # FR-13). An inferred expectation: a difference fails the run, and the
 # design is corrected from the archived baseline.
@@ -182,6 +186,23 @@ M2_INJECTIONS = {
     'state-perms': {'state.perms'},
     'record-node-ip': {'record.consistent'},
 }
+
+
+def moved(table, moves):
+    """TABLE (level -> items) with each item of MOVES at its new level."""
+    levels = {item: level for level, items in table.items() for item in items.split()}
+    levels.update(moves)
+    out = {}
+    for item, level in sorted(levels.items()):
+        out.setdefault(level, []).append(item)
+    return {level: ' '.join(items) for level, items in out.items()}
+
+
+# VT-32 (detailed design 9.9): check on the overlay with FR-13 enabled is the
+# M2 baseline with the FR-13 routing item and the local IPv6 item passing;
+# with a second address on the IPv6 /64 the local IPv6 item warns.
+FR13_BASELINE = moved(M2_BASELINE, {'routing.ai-ipv6': 'PASS', 'ipv6.egress': 'PASS'})
+FR13_EXTRA = moved(FR13_BASELINE, {'ipv6.egress': 'WARN'})
 REPORT_LINE = re.compile(r'^\[(PASS|FAIL|WARN|SKIP|INFO)\] (\S+)', re.M)
 
 
@@ -748,19 +769,23 @@ def m2_check(ctx, main):
                         expected)
 
 
-def m2_sni(ctx, main):
-    """VT-20 to VT-31 (detailed design 9.7, 9.8): the guest judges each case. The
-    administrator's step of verification plan 3.3 opens 443/tcp, as the
+def open_443(ctx, guest):
+    """The administrator's step of verification plan 3.3 opens 443/tcp, as the
     main configuration applies vps-hardening: on a terminal, confirmed from a
     new session."""
+    status, output = guest.interactive('ports-add', f'{VH} ports --add 443/tcp')
+    ctx.require(status == 0 and PORTS_APPLIED in output, 'vps-hardening ports added 443/tcp')
+    status, output = guest.command('ports-confirm', f'{VH} confirm')
+    ctx.require(status == 0 and PORTS_CONFIRMED in output, 'the port change confirmed from a new root session')
+
+
+def m2_sni(ctx, main):
+    """VT-20 to VT-31 (detailed design 9.7, 9.8): the guest judges each case."""
     with Guest(ctx, 'sni', ctx.overlay(main, 'sni.qcow2')) as guest:
         guest.phase('network', required=True)
         guest.phase('m2-prep', required=True, script='m2.sh')
         guest.phase('sni-deploy', required=True, script='m2.sh')
-        status, output = guest.interactive('ports-add', f'{VH} ports --add 443/tcp')
-        ctx.require(status == 0 and PORTS_APPLIED in output, 'vps-hardening ports added 443/tcp')
-        status, output = guest.command('ports-confirm', f'{VH} confirm')
-        ctx.require(status == 0 and PORTS_CONFIRMED in output, 'the port change confirmed from a new root session')
+        open_443(ctx, guest)
         guest.phase('sni-prep', required=True, script='m2.sh')
         for name in ('vt20', 'vt21', 'vt22', 'vt23', 'vt24', 'vt25', 'vt26'):
             guest.phase(name, script='m2.sh')
@@ -775,8 +800,27 @@ def m2_sni(ctx, main):
         guest.poweroff()
 
 
+def m2_fr13(ctx, main):
+    """VT-32 (detailed design 9.9): the guest judges the routes, the address
+    families and the egress isolation; here the two check results."""
+    with Guest(ctx, 'fr13', ctx.overlay(main, 'fr13.qcow2')) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('fr13-net', required=True, script='m2.sh')
+        guest.phase('fr13-deploy', required=True, script='m2.sh')
+        open_443(ctx, guest)
+        guest.phase('fr13-prep', required=True, script='m2.sh')
+        guest.phase('vt32', script='m2.sh')
+        guest.phase('vt32-udp', script='m2.sh')
+        guest.poweroff()
+    out = ctx.evidence / 'fr13/guest/vt32'
+    judge_baseline(ctx, verdicts(ctx, out / 'check.out'), FR13_BASELINE, '9.9', 'VT-32 check', 'vt32-check')
+    judge_baseline(ctx, verdicts(ctx, out / 'check-extra.out'), FR13_EXTRA, '9.9',
+                   'VT-32 check with a second IPv6 address', 'vt32-check-extra')
+
+
 SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy, 'm2-check': m2_check,
-          'm2-sni': m2_sni}
+          'm2-sni': m2_sni, 'm2-fr13': m2_fr13}
 
 
 def main():
