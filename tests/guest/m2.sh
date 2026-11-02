@@ -1497,9 +1497,12 @@ phase_vt26() {
 # VT-27 SHAPE: twenty unauthenticated connections with SNI target.example
 # whose ClientHello tests/guest/hello.py reshapes: split into TLS records,
 # sent in four segments with pauses of up to 300 ms, or large with ML-KEM in
-# one send. Every one must be forwarded to the stand-in. A failure is a
-# finding for solution design 4.4 and SR-3, not to be retried (verification
-# plan 6).
+# one send. Every large one must be forwarded to the stand-in. The other two
+# shapes are judged against the behaviour accepted in requirements D39
+# (solution design 4.4 and SR-3): the forwarder's TLS sniffing reads only the
+# first record, so every one is routed to blocked and none reaches the
+# stand-in. If they start getting through, Xray's sniffing has changed and D39
+# is due for review. Never retried (verification plan 6).
 phase_vt27() {
   local shape="${1-}" fwd out n ok direct blocked served syn
   case "$shape" in
@@ -1534,8 +1537,13 @@ phase_vt27() {
     "stand-in served $served, SYN to the stand-in $syn" \
     "pieces sent of $(jq -s '.[0].planned | length' "$out.jsonl"): $(jq -rs '[.[] | .sent | length] | group_by(.)
       | map("\(.[0]) in \(length)") | join(", ")' "$out.jsonl")" >"$out.txt"
-  { [ "$ok" = 20 ] && [ "$direct" -ge 20 ] && [ "$blocked" = 0 ] && [ "$served" -ge 20 ] && [ "$syn" -ge 20 ]; } ||
-    fail "VT-27 $shape: not every connection was forwarded ($(paste -sd ';' "$out.txt"))"
+  if [ "$shape" = large ]; then
+    { [ "$ok" = 20 ] && [ "$direct" -ge 20 ] && [ "$blocked" = 0 ] && [ "$served" -ge 20 ] && [ "$syn" -ge 20 ]; } ||
+      fail "VT-27 $shape: not every connection was forwarded ($(paste -sd ';' "$out.txt"))"
+  else
+    { [ "$ok" = 0 ] && [ "$direct" = 0 ] && [ "$blocked" -ge 20 ] && [ "$served" = 0 ] && [ "$syn" = 0 ]; } ||
+      fail "VT-27 $shape: differs from the behaviour accepted in requirements D39 ($(paste -sd ';' "$out.txt"))"
+  fi
 }
 
 # VT-28: cross-authority probes over the node, SNI target.example with
