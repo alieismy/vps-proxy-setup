@@ -199,7 +199,9 @@ expect_no_secret() {
 # Everything a read-only command must leave as it was (verification plan 4,
 # detailed design 9.4). Excluded: /etc/resolv.conf and /etc/adjtime; the
 # content of the 3X-UI database files, compared by db_digest instead; the
-# panel's metrics file, which it rewrites every minute; rule counters.
+# panel's metrics file, which it rewrites every minute; rule counters; the
+# UDP socket that systemd-timesyncd binds to a wildcard ephemeral port for
+# each time request and closes on the reply (run 41595764537).
 snapshot() {
   local name="$1" unit
   {
@@ -219,7 +221,8 @@ snapshot() {
         "$(systemctl is-active "$unit" 2>/dev/null || true)"
     done
     echo '== listeners'
-    ss -Hltnu | awk '{ print $1, $5 }' | sort -u || echo "ss exit $?"
+    ss -Hltnup | awk '!($1 == "udp" && /users:[(][(]"systemd-timesyn",/) { print $1, $5 }' | sort -u ||
+      echo "ss exit $?"
     echo '== packages'
     dpkg-query -W -f '${Package}:${Architecture} ${Version} ${db:Status-Abbrev}\n' || echo "dpkg-query exit $?"
   } >"$phase_dir/snap-$name.txt" 2>&1
