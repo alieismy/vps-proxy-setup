@@ -203,6 +203,12 @@ def moved(table, moves):
 # with a second address on the IPv6 /64 the local IPv6 item warns.
 FR13_BASELINE = moved(M2_BASELINE, {'routing.ai-ipv6': 'PASS', 'ipv6.egress': 'PASS'})
 FR13_EXTRA = moved(FR13_BASELINE, {'ipv6.egress': 'WARN'})
+# VT-34 (detailed design 9.10): without the guest's IPv6 address and route the
+# local IPv6 item fails. VT-33: the outbound and rule of FR-13 added to the
+# template of a host deployed with FR-13 off fail the routing item, and the
+# local IPv6 item stays SKIP.
+FR13_NOIPV6 = moved(FR13_BASELINE, {'ipv6.egress': 'FAIL'})
+VT33_ADDED = moved(M2_BASELINE, {'routing.ai-ipv6': 'FAIL'})
 REPORT_LINE = re.compile(r'^\[(PASS|FAIL|WARN|SKIP|INFO)\] (\S+)', re.M)
 
 
@@ -719,6 +725,7 @@ def m2_deploy(ctx, main):
         guest.phase('network', required=True)
         guest.phase('m2-prep', required=True, script='m2.sh')
         guest.phase('vt11', script='m2.sh')
+        guest.phase('vt33-preflight', script='m2.sh')
         guest.poweroff()
     # The input file, the test token and a fresh target-check result are on this disk.
     names = ('vt10', 'vt12', 'vt13-fail', 'vt15-inbound', 'vt15-client', 'vt15-settings', 'vt17-lost',
@@ -767,6 +774,14 @@ def m2_check(ctx, main):
             guest.poweroff()
         judge_injection(ctx, name, baseline, verdicts(ctx, ctx.evidence / f'{label}/guest/{label}/check.out'),
                         expected)
+    # VT-33 ③ through the same injection phase: the items move from SKIP, which
+    # judge_injection does not cover, so the result is compared as a table.
+    label = 'vt71-ai-ipv6-off'
+    with Guest(ctx, label, ctx.overlay(disk, f'{label}.qcow2')) as guest:
+        guest.phase('vt71', 'ai-ipv6-off', script='m2.sh')
+        guest.poweroff()
+    judge_baseline(ctx, verdicts(ctx, ctx.evidence / f'{label}/guest/{label}/check.out'), VT33_ADDED, '9.10',
+                   'VT-33 with the FR-13 outbound and rule added', 'vt33-added')
 
 
 def open_443(ctx, guest):
@@ -801,8 +816,9 @@ def m2_sni(ctx, main):
 
 
 def m2_fr13(ctx, main):
-    """VT-32 (detailed design 9.9): the guest judges the routes, the address
-    families and the egress isolation; here the two check results."""
+    """VT-32 to VT-34 (detailed design 9.9, 9.10): the guests judge the routes,
+    the address families, the failures and the egress isolation; here the
+    check results."""
     with Guest(ctx, 'fr13', ctx.overlay(main, 'fr13.qcow2')) as guest:
         guest.phase('network', required=True)
         guest.phase('m2-prep', required=True, script='m2.sh')
@@ -812,11 +828,27 @@ def m2_fr13(ctx, main):
         guest.phase('fr13-prep', required=True, script='m2.sh')
         guest.phase('vt32', script='m2.sh')
         guest.phase('vt32-udp', script='m2.sh')
+        guest.phase('vt33', script='m2.sh')
+        guest.phase('vt34', script='m2.sh')
         guest.poweroff()
     out = ctx.evidence / 'fr13/guest/vt32'
     judge_baseline(ctx, verdicts(ctx, out / 'check.out'), FR13_BASELINE, '9.9', 'VT-32 check', 'vt32-check')
     judge_baseline(ctx, verdicts(ctx, out / 'check-extra.out'), FR13_EXTRA, '9.9',
                    'VT-32 check with a second IPv6 address', 'vt32-check-extra')
+    judge_baseline(ctx, verdicts(ctx, ctx.evidence / 'fr13/guest/vt34/check-noipv6.out'), FR13_NOIPV6, '9.10',
+                   'VT-34 check without IPv6', 'vt34-check-noipv6')
+    # VT-33 ②: the same overlay deployed with FR-13 off.
+    with Guest(ctx, 'fr13-off', ctx.overlay(main, 'fr13-off.qcow2')) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('fr13-net', required=True, script='m2.sh')
+        guest.phase('fr13-off-deploy', required=True, script='m2.sh')
+        open_443(ctx, guest)
+        guest.phase('fr13-prep', required=True, script='m2.sh')
+        guest.phase('vt33-off', script='m2.sh')
+        guest.poweroff()
+    judge_baseline(ctx, verdicts(ctx, ctx.evidence / 'fr13-off/guest/vt33-off/check.out'), M2_BASELINE, '9.10',
+                   'VT-33 check with FR-13 off', 'vt33-off-check')
 
 
 SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy, 'm2-check': m2_check,
