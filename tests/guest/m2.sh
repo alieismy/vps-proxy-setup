@@ -2728,10 +2728,33 @@ users_begin() {
   jq '{old: .obj.client.uuid}' "$PANEL_OUT" >"$PRIVATE/$1-uuids.json"
 }
 
+# users_redact NAME UUIDS: the access log lines of the window NAME, with the
+# UUIDs of UUIDS (old, new) as <old UUID> and <new UUID> and any other UUID as
+# <UUID>. Xray v26.10.21 names the UUID it rejects ("invalid request user id:
+# <UUID>", proxy/vless/encoding/encoding.go), and a UUID is a test secret.
+users_redact() {
+  python3 - "$phase_dir/$1-access.txt" "$2" <<'PY' || driver_fail "$1: the access log could not be redacted"
+import json, os, re, sys
+
+path, uuids = sys.argv[1:3]
+with open(uuids) as f:
+    known = json.load(f)
+with open(path, encoding='utf-8', errors='replace') as f:
+    text = f.read()
+for key in ('old', 'new'):
+    if known.get(key):
+        text = text.replace(known[key], f'<{key} UUID>')
+text = re.sub('[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', '<UUID>', text)
+with open(path + '.tmp', 'w', encoding='utf-8') as f:
+    f.write(text)
+os.replace(path + '.tmp', path)
+PY
+}
+
 # users_after NAME EMAIL: after the change, the user's requests come to fail
 # (users_until_fails). Then, in one window of the access log, one more of
-# them fails and one of alice's works, and the log has her connection and
-# none of the user's.
+# them fails and one of alice's works; the log has her connection, none of
+# the user's, and Xray's rejection of the user's old UUID.
 users_after() {
   local port reality
   port="$(users_port "$2")"
@@ -2742,12 +2765,15 @@ users_after() {
   ! users_get "$1-$2" "$port" || works=1
   users_get "$1-alice" "$(users_port alice)" || works="$works-alice"
   edge_end
+  users_redact "$1" "$PRIVATE/$1-uuids.json"
   mihomo_log alice
   mihomo_log "$2"
   [ "$works" = 0 ] || fail "$1: in the window, $2's request worked or alice's failed ($works)"
   grep -qE "accepted tcp:probe\.example:80 \[$reality >> direct\] email: alice\$" "$phase_dir/$1-access.txt" ||
     fail "$1: the access log has no connection of alice"
   ! grep -qE " email: $2\$" "$phase_dir/$1-access.txt" || fail "$1: the access log has a connection of $2"
+  grep -qF 'invalid request user id: <old UUID>' "$phase_dir/$1-access.txt" ||
+    fail "$1: the access log has no rejection of $2's old UUID"
 }
 
 # users_unusable NAME EMAIL: what the user's subscription at the handoff
@@ -2912,6 +2938,7 @@ PY
   local works=0
   users_get vt37-carol-new "$(users_port carol)" || works=1
   edge_end
+  users_redact vt37-new "$PRIVATE/vt37-uuids.json"
   mihomo_log carol
   [ "$works" = 0 ] || fail "VT-37: carol's request with the new UUID failed"
   grep -qE "accepted tcp:probe\.example:80 \[$(xray_tag 443) >> direct\] email: carol\$" \
