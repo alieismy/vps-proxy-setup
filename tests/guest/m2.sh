@@ -352,6 +352,20 @@ if real and fwd:
     if ipv6 == 'off':
         check(rules[5:] == default[1:], 'template: the other default rules follow')
         check(all(o.get('tag') != 'ai-ipv6' for o in t.get('outbounds') or []), 'template: no ai-ipv6 outbound')
+    else:
+        # FR-13 (detailed design 4.4): the sixth rule; the outbound appended,
+        # with the finalRules of direct; no dns.
+        ai_rule = {'type': 'field', 'inboundTag': [r['tag']], 'domain': ['geosite:openai', 'geosite:anthropic'],
+                   'outboundTag': 'ai-ipv6'}
+        check(rules[5:6] == [ai_rule] and rules[6:] == default[1:],
+              'template: the FR-13 rule sixth, then the other default rules')
+        obs = t.get('outbounds') or []
+        final = [(o.get('settings') or {}).get('finalRules') for o in obs if o.get('tag') == 'direct'][:1]
+        ai = {'tag': 'ai-ipv6', 'protocol': 'freedom', 'settings': {'finalRules': final[0] if final else None},
+              'streamSettings': {'sockopt': {'domainStrategy': 'ForceIPv6v4'}}}
+        check(bool(final and final[0]) and obs[-1:] == [ai] and [o.get('tag') for o in obs].count('ai-ipv6') == 1,
+              'template: one ai-ipv6 outbound, last, with the finalRules of direct')
+        check('dns' not in t, 'template: no dns')
     check((t.get('routing') or {}).get('domainStrategy', 'AsIs') == 'AsIs', 'template: domainStrategy AsIs')
     check([o.get('tag') for o in t.get('outbounds') or []][:2] == ['direct', 'blocked'],
           'template: direct is the first outbound')
@@ -397,16 +411,16 @@ sys.exit(1 if fails else 0)
 PY
 }
 
-# vt16_config MODE: the configuration 3X-UI generated for Xray against the
-# database (detailed design 17). MODE info only counts the users already in it;
-# MODE full judges it.
+# vt16_config MODE [IPV6]: the configuration 3X-UI generated for Xray against
+# the database (detailed design 17). MODE info only counts the users already in
+# it; MODE full judges it, with IPV6 on also the FR-13 rule and outbound.
 vt16_config() {
   local state uri
   state="$(vps_fn xui_db_state)" && uri="$(vps_fn xui_db_uri "$state")" || return 1
-  python3 - "$uri" "$XRAY_CONFIG" "$1" <<'PY'
+  python3 - "$uri" "$XRAY_CONFIG" "$1" "${2-off}" <<'PY'
 import json, sqlite3, sys
 
-uri, path, mode = sys.argv[1:4]
+uri, path, mode, ipv6 = sys.argv[1:5]
 con = sqlite3.connect(uri, uri=True, timeout=5)
 con.row_factory = sqlite3.Row
 db = {r['protocol']: dict(r) for r in con.execute('SELECT * FROM inbounds')}
@@ -439,8 +453,13 @@ rr_db = (json.loads(db['vless']['stream_settings']).get('realitySettings') or {}
 rr = ((real or {}).get('streamSettings') or {}).get('realitySettings') or {}
 check(all(rr.get(k) == rr_db.get(k) for k in ('target', 'serverNames', 'shortIds', 'privateKey')),
       'generated: REALITY target, serverNames, shortIds and key as in the database')
-check(((cfg.get('routing') or {}).get('rules') or [])[:5] == tpl['routing']['rules'][:5],
-      'generated: the api rule and rules 1 to 4 as in the template')
+n = 6 if ipv6 == 'on' else 5
+check(((cfg.get('routing') or {}).get('rules') or [])[:n] == tpl['routing']['rules'][:n],
+      'generated: the api rule and rules 1 to 4' + (' and the FR-13 rule' if n == 6 else '') + ' as in the template')
+if ipv6 == 'on':
+    ai = [o for o in cfg.get('outbounds') or [] if o.get('tag') == 'ai-ipv6']
+    check(len(ai) == 1 and ai == [o for o in tpl.get('outbounds') or [] if o.get('tag') == 'ai-ipv6'],
+          'generated: the ai-ipv6 outbound as in the template')
 check([o.get('tag') for o in cfg.get('outbounds') or []][:1] == ['direct'], 'generated: direct first')
 sys.exit(1 if fails else 0)
 PY
@@ -456,7 +475,8 @@ vt16_judge() {
   vt16_config info >"$phase_dir/$name-vt16-config-before.txt" 2>&1 || true
   systemctl restart x-ui.service
   wait_xui_stable
-  vt16_config full | tee "$phase_dir/$name-vt16-config.txt" || fail "$name: VT-16 generated configuration checks failed"
+  vt16_config full "$2" | tee "$phase_dir/$name-vt16-config.txt" ||
+    fail "$name: VT-16 generated configuration checks failed"
 }
 
 # The seam of detailed design 19 for VT-12 and VT-13, run through deploy_fn:
@@ -1073,9 +1093,11 @@ phase_vt70() {
 }
 
 # One VT-71 injection of M2 on its own overlay of the deployed disk (detailed
-# design 9.6); tests/vm.py compares the check result with the baseline.
+# design 9.6); tests/vm.py compares the check result with the baseline. The
+# injections named ai-* run on the disk deployed with FR-13 enabled, after
+# fr13-boot (9.11).
 phase_vt71() {
-  local name="$1" reality
+  local name="$1" reality fwd
   settle
   wait_xui_stable
   case "$name" in
@@ -1126,6 +1148,38 @@ phase_vt71() {
     outbound-blocked)
       template_edit '.outbounds |= map(if .tag == "blocked" then {tag, protocol: "freedom"} else . end)'
       ;;
+    # FR-13 (verification plan VT-71): each value is one Xray accepts.
+    ai-strategy)
+      template_edit '.outbounds |= map(if .tag == "ai-ipv6"
+        then .streamSettings.sockopt.domainStrategy = "UseIPv6v4" else . end)'
+      ;;
+    ai-send-through)
+      template_edit '.outbounds |= map(if .tag == "ai-ipv6" then .sendThrough = "'"$GUEST6"'" else . end)'
+      ;;
+    ai-happy-eyeballs)
+      template_edit '.outbounds |= map(if .tag == "ai-ipv6"
+        then .streamSettings.sockopt.happyEyeballs = {tryDelayMs: 250, prioritizeIPv6: true} else . end)'
+      ;;
+    ai-final-rules)
+      template_edit '.outbounds |= map(if .tag == "ai-ipv6"
+        then .settings.finalRules = [{action: "allow", ip: ["'"$BLOCKED6"'"]}] + .settings.finalRules else . end)'
+      ;;
+    ai-inbound-tag)
+      fwd="$(xray_tag 20443)"
+      [ -n "$fwd" ] || driver_fail 'no single inbound on 20443'
+      template_edit '.routing.rules |= map(if .outboundTag == "ai-ipv6" then .inboundTag = ["'"$fwd"'"] else . end)'
+      ;;
+    ai-category)
+      template_edit '.routing.rules |= map(if .outboundTag == "ai-ipv6" then .domain = ["geosite:openai"] else . end)'
+      ;;
+    ai-rule-last)
+      template_edit '.routing.rules |= [.[] | select(.outboundTag != "ai-ipv6")]
+        + [.[] | select(.outboundTag == "ai-ipv6")]'
+      ;;
+    ai-outbound-first)
+      template_edit '.outbounds |= [.[] | select(.tag == "ai-ipv6")] + [.[] | select(.tag != "ai-ipv6")]'
+      ;;
+    ai-dns) template_edit '.dns = {servers: ["localhost"], queryStrategy: "UseIPv4"}' ;;
     api-listen)
       template_edit '.inbounds |= map(if .tag == "api" then .listen = "0.0.0.0" else . end)'
       wait_port 62789 exposed
@@ -1774,10 +1828,11 @@ phase_vt31() {
 }
 
 # ---------------------------------------------------------------------------
-# FR-13 (detailed design 9.9, 9.10; verification plan 3.3, 3.6, 4.5): the
+# FR-13 (detailed design 9.9 to 9.11; verification plan 3.3, 3.6, 4.5): the
 # overlay with an IPv6 /64 on the stand-in's veth, deployed with FR-13 enabled
 # (and once with it off); the dual-stack stand-in; the egress isolation;
-# VT-32 to VT-34.
+# VT-32 to VT-34; VT-16 on that overlay. The cases, the regressions and the
+# FR-13 injections of VT-71 boot overlays of the deployed disk.
 
 # The guest's end of the stand-in's veth (phase network of m1.sh).
 readonly GUEST4=198.51.100.1
@@ -1820,9 +1875,30 @@ phase_fr13_net() {
   [ "$(vps_fn ipv6_egress_facts)" = '1 0 1' ] || fail 'the guest does not have exactly one usable IPv6 address and route'
 }
 
+# A new boot of the disk deployed with FR-13 enabled, before the cases and
+# each VT-71 injection: the namespaces again, and the guest's IPv6. The
+# stand-in starts in fr13-prep.
+phase_fr13_boot() {
+  settle
+  test_namespaces
+  capture client-ping ip netns exec vpsns-client ping -c 1 -W 5 192.0.2.1
+  expect_rc client-ping 0
+  phase_fr13_net
+  wait_xui_stable
+}
+
 phase_fr13_deploy() {
   write_input "$FR13_INPUT" ipv6_ai_egress=on
   full_deploy fr13-deploy "$FR13_INPUT"
+}
+
+# VT-16 on the overlay with FR-13 enabled (verification plan 4.5), right after
+# the deploy, before fr13-prep saves the template again: as on the main
+# configuration, with the FR-13 rule sixth and the ai-ipv6 outbound last.
+phase_fr13_vt16() {
+  collect_markers
+  vt16_judge fr13 on
+  scan_markers
 }
 
 # fr13_hosts NAME [4|6|ADDRESS]...: /etc/hosts maps NAME to the stand-in's
@@ -2279,6 +2355,14 @@ phase_vt33() {
 
 # VT-33 ②: the same overlay deployed with FR-13 off.
 phase_fr13_off_deploy() { full_deploy fr13-off-deploy "$M2_INPUT"; }
+
+# The database part of VT-16 on that deploy, for its shortId digest: the two
+# deploys of the job compare their shortIds (tests/vm.py).
+phase_fr13_off_vt16() {
+  collect_markers
+  vt16_db fr13-off off || fail 'fr13-off: VT-16 database checks failed'
+  scan_markers
+}
 
 # Neither the template nor the generated config has the outbound or the rule
 # of FR-13. A test domain with both stand-in addresses goes to direct, by the

@@ -725,10 +725,16 @@ write_input() {
   done
 }
 
-phase_network() {
-  settle
+# The client and stand-in namespaces (verification plan 3.3). They do not
+# survive a reboot; the test CA and the token on the disk do.
+test_namespaces() {
   netns_pair vpsns-client vps-client0 192.0.2.1 192.0.2.2
   netns_pair vpsns-standin vps-standin0 198.51.100.1 "$STANDIN"
+}
+
+phase_network() {
+  settle
+  test_namespaces
   grep -qF ' target.example ' /etc/hosts ||
     printf '%s target.example other.example probe.example\n' "$STANDIN" >>/etc/hosts
   # VT-04 and VT-05 need an unprivileged account; cloud-init's default user has uid 1000.

@@ -209,6 +209,11 @@ FR13_EXTRA = moved(FR13_BASELINE, {'ipv6.egress': 'WARN'})
 # local IPv6 item stays SKIP.
 FR13_NOIPV6 = moved(FR13_BASELINE, {'ipv6.egress': 'FAIL'})
 VT33_ADDED = moved(M2_BASELINE, {'routing.ai-ipv6': 'FAIL'})
+# The FR-13 part of VT-71 (detailed design 9.11): each injection fails only
+# the FR-13 routing item, against the check of VT-32.
+FR13_INJECTIONS = {name: {'routing.ai-ipv6'} for name in (
+    'ai-strategy', 'ai-send-through', 'ai-happy-eyeballs', 'ai-final-rules', 'ai-inbound-tag', 'ai-category',
+    'ai-rule-last', 'ai-outbound-first', 'ai-dns')}
 REPORT_LINE = re.compile(r'^\[(PASS|FAIL|WARN|SKIP|INFO)\] (\S+)', re.M)
 
 
@@ -734,22 +739,22 @@ def m2_deploy(ctx, main):
         with Guest(ctx, name, ctx.overlay(disk, f'{name}.qcow2')) as guest:
             guest.phase(name, script='m2.sh')
             guest.poweroff()
-    judge_short_ids(ctx, names)
+    judge_short_ids(ctx, [(name, name) for name in names])
 
 
-def judge_short_ids(ctx, names):
-    """VT-16: every deploy of the run generated its own shortId. The guests
-    archive only a digest of it."""
+def judge_short_ids(ctx, phases, minimum=3):
+    """VT-16: every deploy of the job generated its own shortId. The guests
+    archive only a digest of it; PHASES are (guest, phase) pairs."""
     digests = {}
-    for name in names:
-        for path in sorted((ctx.evidence / name / 'guest' / name).glob('*sid-digest.txt')):
-            digests[f'{name}/{path.name}'] = path.read_text().strip()
+    for guest, phase in phases:
+        for path in sorted((ctx.evidence / guest / 'guest' / phase).glob('*sid-digest.txt')):
+            digests[f'{guest}/{path.name}'] = path.read_text().strip()
     lines = ''.join(f'{k} {v}\n' for k, v in sorted(digests.items()))
     (ctx.evidence / 'vt16-short-ids.txt').write_text(lines)
-    if len(digests) < 3:
+    if len(digests) < minimum:
         ctx.fail(f'VT-16: only {len(digests)} shortId digests to compare')
     elif len(set(digests.values())) != len(digests):
-        ctx.fail('VT-16: two deploys of the run have the same shortId')
+        ctx.fail('VT-16: two deploys of the job have the same shortId')
 
 
 def m2_check(ctx, main):
@@ -816,39 +821,58 @@ def m2_sni(ctx, main):
 
 
 def m2_fr13(ctx, main):
-    """VT-32 to VT-34 (detailed design 9.9, 9.10): the guests judge the routes,
-    the address families, the failures and the egress isolation; here the
-    check results."""
-    with Guest(ctx, 'fr13', ctx.overlay(main, 'fr13.qcow2')) as guest:
+    """VT-32 to VT-34, and on the overlay with FR-13 enabled the regressions
+    and the FR-13 part of VT-71 (detailed design 9.9 to 9.11): the guests judge
+    the routes, the address families, the failures, the egress isolation and
+    the regressions; here the check results."""
+    # The deployed disk: VT-16 right after the deploy, then the
+    # administrator's step that opens 443.
+    disk = ctx.overlay(main, 'fr13.qcow2')
+    with Guest(ctx, 'fr13', disk) as guest:
         guest.phase('network', required=True)
         guest.phase('m2-prep', required=True, script='m2.sh')
         guest.phase('fr13-net', required=True, script='m2.sh')
         guest.phase('fr13-deploy', required=True, script='m2.sh')
+        guest.phase('fr13-vt16', script='m2.sh')
         open_443(ctx, guest)
-        guest.phase('fr13-prep', required=True, script='m2.sh')
-        guest.phase('vt32', script='m2.sh')
-        guest.phase('vt32-udp', script='m2.sh')
-        guest.phase('vt33', script='m2.sh')
-        guest.phase('vt34', script='m2.sh')
         guest.poweroff()
-    out = ctx.evidence / 'fr13/guest/vt32'
-    judge_baseline(ctx, verdicts(ctx, out / 'check.out'), FR13_BASELINE, '9.9', 'VT-32 check', 'vt32-check')
+    # The cases and the regressions on one overlay of it, the injections each
+    # on its own.
+    with Guest(ctx, 'fr13-cases', ctx.overlay(disk, 'fr13-cases.qcow2')) as guest:
+        guest.phase('fr13-boot', required=True, script='m2.sh')
+        guest.phase('fr13-prep', required=True, script='m2.sh')
+        for name in ('vt32', 'vt32-udp', 'vt33', 'vt34', 'vt20', 'vt23', 'vt24', 'vt25', 'vt26', 'vt30', 'vt31'):
+            guest.phase(name, script='m2.sh')
+        guest.poweroff()
+    out = ctx.evidence / 'fr13-cases/guest/vt32'
+    baseline = verdicts(ctx, out / 'check.out')
+    judge_baseline(ctx, baseline, FR13_BASELINE, '9.9', 'VT-32 check', 'vt32-check')
     judge_baseline(ctx, verdicts(ctx, out / 'check-extra.out'), FR13_EXTRA, '9.9',
                    'VT-32 check with a second IPv6 address', 'vt32-check-extra')
-    judge_baseline(ctx, verdicts(ctx, ctx.evidence / 'fr13/guest/vt34/check-noipv6.out'), FR13_NOIPV6, '9.10',
-                   'VT-34 check without IPv6', 'vt34-check-noipv6')
+    judge_baseline(ctx, verdicts(ctx, ctx.evidence / 'fr13-cases/guest/vt34/check-noipv6.out'), FR13_NOIPV6,
+                   '9.10', 'VT-34 check without IPv6', 'vt34-check-noipv6')
+    for name, expected in FR13_INJECTIONS.items():
+        label = f'vt71-{name}'
+        with Guest(ctx, label, ctx.overlay(disk, f'{label}.qcow2')) as guest:
+            guest.phase('fr13-boot', script='m2.sh')
+            guest.phase('vt71', name, script='m2.sh')
+            guest.poweroff()
+        judge_injection(ctx, name, baseline, verdicts(ctx, ctx.evidence / f'{label}/guest/{label}/check.out'),
+                        expected)
     # VT-33 ②: the same overlay deployed with FR-13 off.
     with Guest(ctx, 'fr13-off', ctx.overlay(main, 'fr13-off.qcow2')) as guest:
         guest.phase('network', required=True)
         guest.phase('m2-prep', required=True, script='m2.sh')
         guest.phase('fr13-net', required=True, script='m2.sh')
         guest.phase('fr13-off-deploy', required=True, script='m2.sh')
+        guest.phase('fr13-off-vt16', script='m2.sh')
         open_443(ctx, guest)
         guest.phase('fr13-prep', required=True, script='m2.sh')
         guest.phase('vt33-off', script='m2.sh')
         guest.poweroff()
     judge_baseline(ctx, verdicts(ctx, ctx.evidence / 'fr13-off/guest/vt33-off/check.out'), M2_BASELINE, '9.10',
                    'VT-33 check with FR-13 off', 'vt33-off-check')
+    judge_short_ids(ctx, [('fr13', 'fr13-vt16'), ('fr13-off', 'fr13-off-vt16')], 2)
 
 
 SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy, 'm2-check': m2_check,
