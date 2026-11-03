@@ -1866,9 +1866,20 @@ phase_fr13_prep() {
 # through the user-network uplink, DNS queries included, are logged, rejected
 # and counted, port 53 apart from the rest. Connections the runner forwards
 # in are not new in that direction. Zeroes the counters.
+#
+# The rejected DNS queries come from systemd-resolved, which hides who asked
+# it (runs 41488828274 and 41571076881). So the isolation also starts two
+# diagnostics, as units that outlive the phase's session until the next
+# isolation_on: a capture of the queries that local processes send to the
+# resolver stub on loopback, and every 0.2 s the sockets to port 53 with
+# their processes. It also sets the resolver's log level to debug, which
+# names what is looked up, also for clients that ask over D-Bus or Varlink
+# rather than port 53. isolation_counts archives all three; they are not
+# judged.
 ISOLATION_SINCE=''
+readonly DNS_DIAG_UNITS=(vps-dnsdiag-capture vps-dnsdiag-sockets)
 isolation_on() {
-  local up cmd
+  local up cmd unit
   up="$(ip -j -4 route show default | jq -r 'if length == 1 then .[0].dev else empty end')"
   [ -n "$up" ] || driver_fail 'no single IPv4 default route for the egress isolation'
   for cmd in iptables ip6tables; do
@@ -1881,11 +1892,29 @@ isolation_on() {
     fi
     "$cmd" -w -Z "$ISOLATION_CHAIN"
   done
+  for unit in "${DNS_DIAG_UNITS[@]}"; do
+    systemctl stop "$unit" 2>/dev/null || true
+    systemctl reset-failed "$unit" 2>/dev/null || true
+  done
+  rm -f "$PRIVATE/dnsdiag.pcap" "$PRIVATE/dnsdiag.err" "$PRIVATE/dnsdiag-sockets.txt"
+  systemd-run --quiet --unit vps-dnsdiag-capture -p "StandardError=file:$PRIVATE/dnsdiag.err" -- \
+    tcpdump -Z root -i lo -nn -U -w "$PRIVATE/dnsdiag.pcap" 'port 53'
+  systemd-run --quiet --unit vps-dnsdiag-sockets -p "StandardOutput=file:$PRIVATE/dnsdiag-sockets.txt" -- \
+    bash -c 'while :; do ss -Htunap "( dport = :53 )" 2>/dev/null || true; sleep 0.2; done'
+  for _ in $(seq 50); do
+    ! grep -qs 'listening on' "$PRIVATE/dnsdiag.err" || break
+    sleep 0.2
+  done
+  grep -qs 'listening on' "$PRIVATE/dnsdiag.err" || driver_fail 'the DNS capture on loopback did not start'
+  resolvectl log-level debug 2>/dev/null || true
   ISOLATION_SINCE="$(date '+%Y-%m-%d %H:%M:%S')"
 }
 
 # isolation_counts NAME: "DNS OTHER" rejected since isolation_on, written with
-# the logged packets to NAME-isolation.txt.
+# the logged packets to NAME-isolation.txt; the diagnostics so far to
+# NAME-dns-queries.txt (one line per query to the stub),
+# NAME-dns-sockets.txt (the sampled sockets without their local address,
+# counted) and NAME-resolved.txt (the resolver's log).
 isolation_counts() {
   local cmd dns=0 other=0 packets
   for cmd in iptables ip6tables; do
@@ -1898,6 +1927,9 @@ isolation_counts() {
     printf 'rejected since %s: DNS %s, other %s\n' "$ISOLATION_SINCE" "$dns" "$other"
     journalctl -q -k --since "$ISOLATION_SINCE" -g 'vps-isolation: ' -o short-iso 2>/dev/null || true
   } >"$phase_dir/$1-isolation.txt"
+  tcpdump -nn -tt -r "$PRIVATE/dnsdiag.pcap" 'dst port 53' >"$phase_dir/$1-dns-queries.txt" 2>/dev/null || true
+  awk '{ $5 = ""; print }' "$PRIVATE/dnsdiag-sockets.txt" 2>/dev/null | sort | uniq -c >"$phase_dir/$1-dns-sockets.txt" || true
+  journalctl -q -u systemd-resolved --since "$ISOLATION_SINCE" -o short-iso >"$phase_dir/$1-resolved.txt" 2>/dev/null || true
   printf '%s %s\n' "$dns" "$other"
 }
 
@@ -2091,7 +2123,7 @@ phase_vt32() {
 # datagram reaches the stand-in. A test domain in the access log means
 # Mihomo has stopped resolving UDP itself: review D40.
 phase_vt32_udp() {
-  local openai anthropic n sampler
+  local openai anthropic n
   openai="$(geo_pick site openai)"
   anthropic="$(geo_pick site anthropic)"
   stop_time_sync
@@ -2100,20 +2132,8 @@ phase_vt32_udp() {
   fr13_hosts "$anthropic" 4 6
   mihomo_up main 7890 hosts "$(fr13_udp_hosts "$openai" "$anthropic")"
   fr13_begin vt32-udp
-  # Which process opens sockets to port 53 during the case, if any: run
-  # 41488828274 rejected DNS queries here, and none in the TCP cases.
-  (
-    while :; do
-      ss -Htunap '( dport = :53 )' 2>/dev/null || true
-      sleep 0.2
-    done
-  ) >"$PRIVATE/vt32-udp-dns-sockets.txt" &
-  sampler=$!
   fr13_udp_send vt32-udp "$openai" "$anthropic"
   fr13_end
-  kill "$sampler"
-  wait "$sampler" || true
-  awk '{ $5 = ""; print }' "$PRIVATE/vt32-udp-dns-sockets.txt" | sort | uniq -c >"$phase_dir/vt32-udp-dns-sockets.txt"
   mihomo_log main
   n="$(isolation_counts vt32-udp)"
   fr13_udp_judge 'VT-32 UDP' vt32-udp "$openai" "$anthropic"
