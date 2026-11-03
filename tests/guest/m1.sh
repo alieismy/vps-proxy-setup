@@ -541,7 +541,7 @@ phase_hardening_install() {
   settle
   fixture_check
   bash "$FIXTURES/vps-hardening-install.sh"
-  [ "$("$VH" --version)" = 'vps-hardening 0.1.1' ] || fail 'vps-hardening is not 0.1.1'
+  [ "$("$VH" --version)" = 'vps-hardening 0.2.0-rc.1' ] || fail 'vps-hardening is not 0.2.0-rc.1'
 }
 
 installed_files() {

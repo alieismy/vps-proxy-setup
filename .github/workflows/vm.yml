@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   # M1 and M2 on Debian 13 amd64 (detailed design 9.1, 9.3). Every job
-  # first builds the main configuration: vps-tuning, vps-hardening v0.1.1,
+  # first builds the main configuration: vps-tuning, vps-hardening v0.2.0-rc.1,
   # this tool from its release installer.
   #   m1-preflight: VT-80, VT-81, VT-01 to VT-05.
   #   m1-check: S1 baseline, VT-71 (M1 part), VT-72 to VT-76.

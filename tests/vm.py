@@ -4,7 +4,7 @@
 Adapted from vps-hardening's tests/vm.py (detailed design 9.1); Debian 13
 amd64 only (NFR-03). Both suites first build the main configuration of
 verification plan 3.2 on an overlay of the official image: vps-tuning applied,
-rebooted and verified; vps-hardening v0.1.1 applied on a pseudo-terminal and
+rebooted and verified; vps-hardening v0.2.0-rc.1 applied on a pseudo-terminal and
 confirmed from a new SSH session; this tool installed by its release installer
 from a local asset directory. Suites:
 
@@ -92,8 +92,8 @@ FIXTURES = {
         'https://github.com/alieismy/vps-tuning/releases/download/v0.2.0-rc.4/install.sh',
         '06c8b235ce0538d6e5247b3b50fa568e6c71f9ee9f28b4cc999f031b5e9978ec'),
     'vps-hardening-install.sh': (
-        'https://github.com/alieismy/vps-hardening/releases/download/v0.1.1/install.sh',
-        '338e20ddfbb1513be7dfd5a41fd33f6c9d95ce76bdf8ab0d4576ba08cf83dcfc'),
+        'https://github.com/alieismy/vps-hardening/releases/download/v0.2.0-rc.1/install.sh',
+        'bcc95fcd6350b5e6e5388a8477460557f09ebb58189f38bd2b82e50f047fb9e4'),
     '3x-ui-install.sh': (
         f"https://raw.githubusercontent.com/MHSanaei/3x-ui/{PINS['VPS_PIN_XUI_COMMIT']}/install.sh",
         PINS['VPS_PIN_XUI_INSTALL_SHA256']),
