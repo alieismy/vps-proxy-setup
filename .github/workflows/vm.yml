@@ -24,12 +24,14 @@ jobs:
   #   m2-sni: VT-20 to VT-31 after a complete deploy, with Mihomo.
   #   m2-fr13: VT-32 to VT-34 after a complete deploy with FR-13 enabled,
   #   IPv6 on the stand-in's veth; VT-33 also deployed with FR-13 off.
+  #   m2-users: VT-35 after a complete deploy with five codes; VT-36 to
+  #   VT-38 with Mihomo.
   vm:
     name: ${{ matrix.suite }}
     strategy:
       fail-fast: false
       matrix:
-        suite: [m1-preflight, m1-check, m2-deploy, m2-check, m2-sni, m2-fr13]
+        suite: [m1-preflight, m1-check, m2-deploy, m2-check, m2-sni, m2-fr13, m2-users]
     runs-on: ubuntu-24.04
     # m1-check boots about twenty guests: the main configuration, S1 and one
     # overlay per injection; m2-check about thirty in the same way.

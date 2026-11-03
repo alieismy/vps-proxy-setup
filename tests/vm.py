@@ -34,6 +34,9 @@ from a local asset directory. Suites:
                 m2-sni, the dual-stack stand-in and the deviations, then
                 VT-32 with the egress isolation; its two check results are
                 judged here.
+  m2-users      one guest: a complete deploy with five codes and VT-35, then
+                443/tcp and the deviations as in m2-sni, and VT-36 to VT-38
+                in turn.
 
 tests/guest/m1.sh is the guest side of M1 and judges everything except
 VT-71; tests/guest/m2.sh, which sources it, the guest side of M2.
@@ -107,7 +110,7 @@ MIHOMO = {
         'mihomo-linux-amd64-compatible-v1.19.33.gz',
         '386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6'),
 }
-SUITE_FIXTURES = {'m2-sni': MIHOMO, 'm2-fr13': MIHOMO}
+SUITE_FIXTURES = {'m2-sni': MIHOMO, 'm2-fr13': MIHOMO, 'm2-users': MIHOMO}
 # The M1 baseline of check on S1 (detailed design 9.5, with the items of
 # FR-13). An inferred expectation: a difference fails the run, and the
 # design is corrected from the archived baseline.
@@ -875,8 +878,23 @@ def m2_fr13(ctx, main):
     judge_short_ids(ctx, [('fr13', 'fr13-vt16'), ('fr13-off', 'fr13-off-vt16')], 2)
 
 
+def m2_users(ctx, main):
+    """VT-35 to VT-38 (detailed design 9.12): the guest judges each case. The
+    three changes are to three different users, one after another."""
+    with Guest(ctx, 'users', ctx.overlay(main, 'users.qcow2')) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('users-deploy', required=True, script='m2.sh')
+        guest.phase('vt35', script='m2.sh')
+        open_443(ctx, guest)
+        guest.phase('users-prep', required=True, script='m2.sh')
+        for name in ('vt36', 'vt37', 'vt38'):
+            guest.phase(name, script='m2.sh')
+        guest.poweroff()
+
+
 SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy, 'm2-check': m2_check,
-          'm2-sni': m2_sni, 'm2-fr13': m2_fr13}
+          'm2-sni': m2_sni, 'm2-fr13': m2_fr13, 'm2-users': m2_users}
 
 
 def main():

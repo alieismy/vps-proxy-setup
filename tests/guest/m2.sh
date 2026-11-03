@@ -78,14 +78,15 @@ token_http() {
   } | curl -q -s --noproxy '*' --max-time 30 -o /dev/null -w '%{http_code}' -K - || true
 }
 
-# vt17_judge NAME: VT-17 after a complete step 7, judged here rather than from
-# the tool's items: the install token is refused and has no row; the install
-# result and the input file are gone; the handoff is a root 0600 file with the
-# panel credentials and each user's addresses; the subscription server
-# listens on loopback only; deploy.conf holds the keys of detailed design 2.8.
-# Only judgments are archived.
+# vt17_judge NAME [USERS]: VT-17 after a complete step 7, judged here rather
+# than from the tool's items: the install token is refused and has no row; the
+# install result and the input file are gone; the handoff is a root 0600 file
+# with the panel credentials and the addresses of each user of USERS (comma
+# separated, alice,bob by default); the subscription server listens on
+# loopback only; deploy.conf holds the keys of detailed design 2.8. Only
+# judgments are archived.
 vt17_judge() {
-  local name="$1" code state uri
+  local name="$1" users="${2-alice,bob}" code state uri
   [ ! -e "$XUI_RESULT" ] || fail "$name: the install result is still there"
   [ ! -e "$M2_INPUT" ] || fail "$name: the input file is still there"
   code="$(token_http)"
@@ -96,11 +97,12 @@ vt17_judge() {
   state="$(vps_fn xui_db_state)" || fail "$name: database not readable"
   uri="$(vps_fn xui_db_uri "$state")" || fail "$name: database not readable"
   python3 - "$uri" "$HANDOFF" "$DEPLOY_CONF" "$RESULT_COPY" "$TARGET_RECORD" "$(tool_version)" \
-    "$(vps_fn pin_value VPS_PIN_XUI_VERSION)" "$(vps_fn pin_value VPS_PIN_CLOUDFLARED_VERSION)" \
+    "$(vps_fn pin_value VPS_PIN_XUI_VERSION)" "$(vps_fn pin_value VPS_PIN_CLOUDFLARED_VERSION)" "$users" \
     >"$phase_dir/$name-vt17.txt" <<'PY' || { cat "$phase_dir/$name-vt17.txt"; fail "$name: VT-17 checks failed"; }
 import json, os, re, sqlite3, stat, sys
 
 uri, handoff, conf, result, record, tool, xui, cfd = sys.argv[1:9]
+users = sys.argv[9].split(',')
 lines, fails = [], []
 
 
@@ -147,7 +149,7 @@ check(p.get('username') == res.get('XUI_USERNAME') and p.get('password') == res.
 check(p.get('webBasePath') == '/' + res.get('XUI_WEB_BASE_PATH', '').strip('/') + '/'
       and p.get('port') == int(res.get('XUI_PANEL_PORT', '0')), 'handoff: webBasePath and panel port')
 want = [{'email': e, 'subscriptionUrl': url('subPath', s), 'mihomoUrl': url('subClashPath', s)} for e, s in clients]
-check([e for e, _ in clients] == ['alice', 'bob'] and h.get('users') == want,
+check([e for e, _ in clients] == users and h.get('users') == want,
       "handoff: each user's two addresses under https://<sub_host>/ with the kept paths")
 
 check(root_0600(conf), 'deploy.conf: a root file with mode 0600')
@@ -268,17 +270,18 @@ phase_vt10() {
   scan_markers
 }
 
-# vt16_db NAME IPV6: VT-16 on the read-only database, independent of the
-# tool's own items. Only judgments and the digest of the shortId are archived.
+# vt16_db NAME IPV6 [USERS]: VT-16 on the read-only database, independent of
+# the tool's own items, for the users of USERS (comma separated, alice,bob by
+# default). Only judgments and the digest of the shortId are archived.
 vt16_db() {
   local name="$1" state uri
   state="$(vps_fn xui_db_state)" || fail "$name: database not readable"
   uri="$(vps_fn xui_db_uri "$state")" || fail "$name: database not readable"
-  python3 - "$uri" "$phase_dir/$name-vt16-db.txt" "$phase_dir/$name-sid-digest.txt" "$2" <<'PY'
+  python3 - "$uri" "$phase_dir/$name-vt16-db.txt" "$phase_dir/$name-sid-digest.txt" "$2" "${3-alice,bob}" <<'PY'
 import hashlib, json, re, sqlite3, sys
 
 uri, out, sid_out, ipv6 = sys.argv[1:5]
-target, sub_host, node_ip, users = 'target.example', 'sub.proxy.example', '192.0.2.1', ['alice', 'bob']
+target, sub_host, node_ip, users = 'target.example', 'sub.proxy.example', '192.0.2.1', sys.argv[5].split(',')
 uuid_re = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 lines, fails = [], []
 
@@ -465,13 +468,14 @@ sys.exit(1 if fails else 0)
 PY
 }
 
-# vt16_judge NAME IPV6: the database, then the generated configuration. 3X-UI
-# may give new users to the running Xray without rewriting the file, and the
-# panel restart of step 7 does not restart Xray (SIGHUP, main.go), so the file
-# is judged after a restart of x-ui; the count before is kept as evidence.
+# vt16_judge NAME IPV6 [USERS]: the database, then the generated
+# configuration. 3X-UI may give new users to the running Xray without
+# rewriting the file, and the panel restart of step 7 does not restart Xray
+# (SIGHUP, main.go), so the file is judged after a restart of x-ui; the count
+# before is kept as evidence.
 vt16_judge() {
   local name="$1"
-  vt16_db "$name" "$2" || fail "$name: VT-16 database checks failed"
+  vt16_db "$name" "$2" "${3-alice,bob}" || fail "$name: VT-16 database checks failed"
   vt16_config info >"$phase_dir/$name-vt16-config-before.txt" 2>&1 || true
   systemctl restart x-ui.service
   wait_xui_stable
@@ -1261,14 +1265,23 @@ xray_tag() {
 # (subscriptionUrl or mihomoUrl), fetched on loopback with the subscription
 # host as Host, as deploy step 7 does. The address reaches curl on stdin.
 sub_get() {
-  local url code
+  local url
   url="$(jq -r --arg e "$1" --arg f "$2" '.users[] | select(.email == $e) | .[$f]' "$HANDOFF")"
-  [[ "$url" =~ ^https://([a-z0-9.-]+)(/[A-Za-z0-9/_-]+)$ ]] || driver_fail "$2 of $1 is not in the expected form"
-  code="$({
+  [[ "$url" =~ ^https:// ]] || driver_fail "$2 of $1 is not in the expected form"
+  sub_fetch "$url" "$3"
+  [ "$SUB_HTTP" = 200 ] || driver_fail "$2 of $1: HTTP $SUB_HTTP"
+}
+
+# sub_fetch URL OUT: the subscription at URL, an address in the form of the
+# handoff, as sub_get fetches it, whatever the status. Sets SUB_HTTP.
+SUB_HTTP=000
+sub_fetch() {
+  [[ "$1" =~ ^https://([a-z0-9.-]+)(/[A-Za-z0-9/_-]+)$ ]] || driver_fail 'a subscription address is not in the expected form'
+  rm -f "$2"
+  SUB_HTTP="$({
     printf 'url = "http://127.0.0.1:%s%s"\n' "$SUB_PORT" "${BASH_REMATCH[2]}"
     printf 'header = "Host: %s"\n' "${BASH_REMATCH[1]}"
-  } | curl -q --silent --noproxy '*' --proto '=http' --max-time 30 -o "$3" -w '%{http_code}' -K -)" || code=000
-  [ "$code" = 200 ] || driver_fail "$2 of $1: HTTP $code"
+  } | curl -q --silent --noproxy '*' --proto '=http' --max-time 30 -o "$2" -w '%{http_code}' -K -)" || SUB_HTTP=000
 }
 
 # mihomo_up NAME PORT [drop-mlkem | hosts JSON]: Mihomo in the client namespace
@@ -1280,10 +1293,17 @@ sub_get() {
 # 3.6). Mixed port PORT, controller PORT+2000, both on loopback of the
 # namespace. The configuration holds her UUID, so it stays private.
 mihomo_up() {
-  local name="$1" port="$2" dir="$PRIVATE/mihomo-$1" unit="vps-mihomo-$1" i code
+  local dir="$PRIVATE/mihomo-$1"
   rm -rf "$dir"
   install -d -m 0700 "$dir"
   sub_get alice mihomoUrl "$dir/subscription.yaml"
+  mihomo_run "$@"
+}
+
+# mihomo_run NAME PORT [drop-mlkem | hosts JSON]: as mihomo_up, from the
+# subscription already in $PRIVATE/mihomo-NAME/subscription.yaml.
+mihomo_run() {
+  local name="$1" port="$2" dir="$PRIVATE/mihomo-$1" unit="vps-mihomo-$1" i code
   python3 - "$dir" "$port" "${3-}" "${4-}" <<'PY' || driver_fail "mihomo $name: no configuration from the subscription"
 import json, os, sys
 import yaml
@@ -2537,6 +2557,385 @@ phase_vt34() {
     fail "VT-34 vt34-nodns: the egress isolation rejected ${n% *} DNS queries and ${n#* } other connections; expected DNS queries only"
   resolved_asked vt34-nodns "$openai" || fail "VT-34 vt34-nodns: the resolver's log has no lookup of $openai"
   ! resolved_asked vt34-nodns "$anthropic" || fail "VT-34 vt34-nodns: systemd-resolved was asked for $anthropic"
+}
+
+# ---------------------------------------------------------------------------
+# Users (VT-35 to VT-38, detailed design 9.12). A deploy with five codes. After
+# the administrator's step that opens 443 and the deviations of m2-sni, the
+# test driver disables bob, resets carol and deletes dave through the panel
+# API with the handoff credentials (verification plan 3.4). alice is never
+# changed: her request in the same window as the changed user's shows that
+# the path works. A request is one curl for http://probe.example/ through
+# that user's Mihomo, in global mode with only the user's node; it works when
+# the stand-in serves it.
+
+readonly USERS_LIST=alice,bob,carol,dave,erin
+
+phase_users_deploy() {
+  write_input "$M2_INPUT" "users=$USERS_LIST"
+  full_deploy users-deploy "$M2_INPUT"
+}
+
+# VT-35: one client per code, whose email is the code, each linked to the
+# REALITY inbound; the UUIDs differ, and so do the subscription IDs; the
+# handoff lists the five users and the generated config has them. These are
+# the checks of VT-16 and VT-17 with the five codes.
+phase_vt35() {
+  collect_markers
+  vt16_judge vt35 off "$USERS_LIST"
+  vt17_judge vt35 "$USERS_LIST"
+  scan_markers
+}
+
+phase_users_prep() {
+  sni_prep "$STANDIN_RULE"
+  : >"$PRIVATE/markers-users"
+}
+
+# users_markers: the leak markers of now, together with all those collected
+# before in this job, so that the UUID and the subscription ID a user had
+# before a change stay in the scan.
+users_markers() {
+  touch "$PRIVATE/markers-users"
+  collect_markers
+  sort -u "$PRIVATE/markers" "$PRIVATE/markers-users" -o "$PRIVATE/markers-users"
+  cp "$PRIVATE/markers-users" "$PRIVATE/markers"
+}
+
+# users_port EMAIL: the mixed port of the user's Mihomo.
+users_port() {
+  case "$1" in
+    alice) printf '7891\n' ;;
+    bob) printf '7892\n' ;;
+    carol) printf '7893\n' ;;
+    dave) printf '7894\n' ;;
+    erin) printf '7895\n' ;;
+    *) driver_fail "no Mihomo port for $1" ;;
+  esac
+}
+
+# users_url EMAIL: the user's Mihomo address: the handoff's, or the one VT-37
+# keeps privately after the reset.
+users_url() {
+  if [ -s "$PRIVATE/users-url-$1" ]; then
+    cat "$PRIVATE/users-url-$1"
+  else
+    jq -r --arg e "$1" '.users[] | select(.email == $e) | .mihomoUrl' "$HANDOFF"
+  fi
+}
+
+# users_up EMAIL: Mihomo with the user's node, from the subscription at
+# users_url, which must serve one proxy; unit vps-mihomo-EMAIL.
+users_up() {
+  local dir="$PRIVATE/mihomo-$1"
+  rm -rf "$dir"
+  install -d -m 0700 "$dir"
+  sub_fetch "$(users_url "$1")" "$dir/subscription.yaml"
+  [ "$SUB_HTTP" = 200 ] || driver_fail "the Mihomo subscription of $1: HTTP $SUB_HTTP"
+  mihomo_run "$1" "$(users_port "$1")"
+}
+
+# users_get NAME PORT: one request through the Mihomo on PORT; true when the
+# stand-in served it.
+users_get() {
+  client_curl "$1" -x "http://127.0.0.1:$2" http://probe.example/
+  [ "$CURL_RC" = 0 ] && [ "$CURL_HTTP" = 200 ] && grep -qx 'stand-in probe.example' "$phase_dir/$1.body"
+}
+
+# users_until_fails NAME PORT: requests every 5 seconds until one fails, for
+# up to 90 seconds: 3X-UI gives the change to the running Xray, or, when it
+# cannot, its job restarts Xray within 30 seconds (wait_port). Then two more
+# must fail too. How many still worked is evidence.
+users_until_fails() {
+  local i
+  for i in $(seq 18); do
+    if ! users_get "$1-wait$i" "$2"; then
+      printf 'request %s was the first to fail\n' "$i" >"$phase_dir/$1-wait.txt"
+      users_get "$1-again1" "$2" && return 1
+      users_get "$1-again2" "$2" && return 1
+      return 0
+    fi
+    sleep 5
+  done
+  printf 'all 18 requests worked\n' >"$phase_dir/$1-wait.txt"
+  return 1
+}
+
+# users_sub NAME FILE UUIDS: a summary of the Mihomo subscription in FILE
+# (absent when the server sent no body), fetched with status SUB_HTTP, to
+# NAME.json in the evidence: the status, the size and, for each proxy, its
+# name, type, server and port, and whether its UUID is the user's UUID before
+# the change ("old"), after it ("new") or another. UUIDS is a private JSON
+# file with old and, after a reset, new. The VLESS proxies go to
+# $PRIVATE/mihomo-NAME/subscription.yaml for mihomo_run; prints their number.
+users_sub() {
+  local dir="$PRIVATE/mihomo-$1"
+  rm -rf "$dir"
+  install -d -m 0700 "$dir"
+  python3 - "$2" "$3" "$SUB_HTTP" "$dir/subscription.yaml" "$phase_dir/$1.json" <<'PY' ||
+import json, os, sys
+import yaml
+
+path, uuids, status, out, summary = sys.argv[1:6]
+with open(uuids) as f:
+    known = json.load(f)
+size, error, proxies = None, None, []
+if os.path.exists(path):
+    with open(path, 'rb') as f:
+        data = f.read()
+    size = len(data)
+    try:
+        doc = yaml.safe_load(data.decode('utf-8')) if data.strip() else None
+    except (UnicodeDecodeError, yaml.YAMLError):
+        doc, error = None, 'not YAML'
+    if isinstance(doc, dict) and isinstance(doc.get('proxies'), list):
+        proxies = [p for p in doc['proxies'] if isinstance(p, dict)]
+    elif doc is not None and error is None:
+        error = 'no proxies list'
+
+
+def label(p):
+    if 'uuid' not in p:
+        return None
+    return next((k for k in ('old', 'new') if known.get(k) and p['uuid'] == known[k]), 'other')
+
+
+rows = [{'name': p.get('name'), 'type': p.get('type'), 'server': p.get('server'), 'port': p.get('port'),
+         'uuid': label(p)} for p in proxies]
+with open(summary, 'w', encoding='utf-8') as f:
+    json.dump({'http': status, 'bytes': size, 'error': error, 'proxies': rows}, f, ensure_ascii=False, indent=2)
+vless = [p for p in proxies if p.get('type') == 'vless']
+if vless:
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        yaml.safe_dump({'proxies': vless}, f, allow_unicode=True, sort_keys=False)
+print(len(vless))
+PY
+    driver_fail "$1: the subscription could not be summarised"
+}
+
+# users_begin NAME EMAIL: the Mihomo of alice and of the user, and a request
+# through each works; the user is enabled, and the UUID the panel returns for
+# the user goes privately to NAME-uuids.json as old.
+users_begin() {
+  users_up alice
+  users_up "$2"
+  users_get "$1-alice-before" "$(users_port alice)" || driver_fail "$1: alice's request failed before the change"
+  users_get "$1-$2-before" "$(users_port "$2")" || driver_fail "$1: $2's request failed before the change"
+  panel_login
+  panel_api GET "clients/get/$2"
+  jq -e '.obj.client.enable == true' "$PANEL_OUT" >/dev/null || driver_fail "$1: $2 is not enabled"
+  jq '{old: .obj.client.uuid}' "$PANEL_OUT" >"$PRIVATE/$1-uuids.json"
+}
+
+# users_after NAME EMAIL: after the change, the user's requests come to fail
+# (users_until_fails). Then, in one window of the access log, one more of
+# them fails and one of alice's works, and the log has her connection and
+# none of the user's.
+users_after() {
+  local port reality
+  port="$(users_port "$2")"
+  users_until_fails "$1-$2" "$port" || fail "$1: $2's requests did not come to fail within 90 seconds"
+  reality="$(xray_tag 443)"
+  edge_begin "$1"
+  local works=0
+  ! users_get "$1-$2" "$port" || works=1
+  users_get "$1-alice" "$(users_port alice)" || works="$works-alice"
+  edge_end
+  mihomo_log alice
+  mihomo_log "$2"
+  [ "$works" = 0 ] || fail "$1: in the window, $2's request worked or alice's failed ($works)"
+  grep -qE "accepted tcp:probe\.example:80 \[$reality >> direct\] email: alice\$" "$phase_dir/$1-access.txt" ||
+    fail "$1: the access log has no connection of alice"
+  ! grep -qE " email: $2\$" "$phase_dir/$1-access.txt" || fail "$1: the access log has a connection of $2"
+}
+
+# users_unusable NAME EMAIL: what the user's subscription at the handoff
+# address returns now, summarised as NAME-sub; a request through a VLESS
+# proxy in it fails, three times.
+users_unusable() {
+  local n
+  sub_fetch "$(jq -r --arg e "$2" '.users[] | select(.email == $e) | .mihomoUrl' "$HANDOFF")" \
+    "$PRIVATE/$1-sub.yaml"
+  n="$(users_sub "$1-sub" "$PRIVATE/$1-sub.yaml" "$PRIVATE/$1-uuids.json")"
+  printf '%s VLESS proxies in the subscription of %s\n' "$n" "$2" >"$phase_dir/$1-sub.txt"
+  [ "$n" -gt 0 ] || return 0
+  mihomo_run "$1-sub" 7896
+  if users_get "$1-sub1" 7896 || users_get "$1-sub2" 7896 || users_get "$1-sub3" 7896; then
+    fail "$1: a request through the node in $2's subscription worked"
+  fi
+  mihomo_log "$1-sub"
+  systemctl stop "vps-mihomo-$1-sub"
+}
+
+# users_save TAG EMAIL...: each user's Mihomo subscription now, privately.
+users_save() {
+  local tag="$1" email
+  shift
+  for email in "$@"; do
+    sub_fetch "$(users_url "$email")" "$PRIVATE/users-$tag-$email.yaml"
+    [ "$SUB_HTTP" = 200 ] || driver_fail "the Mihomo subscription of $email: HTTP $SUB_HTTP"
+  done
+}
+
+# users_same TAG EMAIL...: each user's subscription has the one proxy that
+# users_save kept under TAG, the same in every field but the display name
+# (whether that changed too is recorded), and a request through the user's
+# Mihomo works.
+users_same() {
+  local tag="$1" email
+  shift
+  for email in "$@"; do
+    sub_fetch "$(users_url "$email")" "$PRIVATE/users-$tag-$email-after.yaml"
+    [ "$SUB_HTTP" = 200 ] || fail "$tag: the Mihomo subscription of $email gave HTTP $SUB_HTTP"
+    printf '%s: ' "$email" >>"$phase_dir/$tag-names.txt"
+    python3 - "$PRIVATE/users-$tag-$email.yaml" "$PRIVATE/users-$tag-$email-after.yaml" \
+      >>"$phase_dir/$tag-names.txt" <<'PY' ||
+import sys
+import yaml
+
+before, after = (yaml.safe_load(open(p, encoding='utf-8'))['proxies'] for p in sys.argv[1:3])
+ok = len(before) == len(after) == 1
+if ok:
+    print('name ' + ('unchanged' if before[0].get('name') == after[0].get('name') else 'changed'))
+    ok = {k: v for k, v in before[0].items() if k != 'name'} == {k: v for k, v in after[0].items() if k != 'name'}
+sys.exit(0 if ok else 1)
+PY
+      fail "$tag: the proxy of $email's subscription changed"
+    users_up "$email"
+    users_get "$tag-$email-same" "$(users_port "$email")" || fail "$tag: $email's request failed"
+    mihomo_log "$email"
+  done
+  printf 'subscription and request unchanged: %s\n' "$*" >"$phase_dir/$tag-others.txt"
+}
+
+# users_db_count EMAIL: the user's rows in the clients table, read only.
+users_db_count() {
+  local state uri
+  state="$(vps_fn xui_db_state)" || driver_fail 'database not readable'
+  uri="$(vps_fn xui_db_uri "$state")" || driver_fail 'database not readable'
+  python3 - "$uri" "$1" <<'PY'
+import sqlite3, sys
+
+con = sqlite3.connect(sys.argv[1], uri=True, timeout=5)
+print(con.execute('SELECT count(*) FROM clients WHERE email = ?', (sys.argv[2],)).fetchone()[0])
+PY
+}
+
+# VT-36: bob disabled through the panel API, the record with enable false
+# sent to clients/update (client_edit). His requests fail, and the access log
+# of the window has no connection of his; what his subscription returns then
+# is recorded, and no node in it is usable.
+phase_vt36() {
+  users_markers
+  users_begin vt36 bob
+  client_edit bob '.enable = false'
+  panel_api GET clients/get/bob
+  jq -e '.obj.client.enable == false' "$PANEL_OUT" >/dev/null || fail 'VT-36: the panel does not return bob as disabled'
+  users_after vt36 bob
+  users_unusable vt36 bob
+  users_markers
+  scan_markers
+}
+
+# VT-37: carol's UUID and subscription ID reset through the panel API, as the
+# panel's form does: a new UUID from server/getNewUUID and a new subscription
+# ID of 16 lowercase letters and digits, sent with the rest of her record to
+# clients/update. Her old address returns no node and a request with her old
+# UUID fails; her new address returns one node with the new UUID, and a
+# request through it works; the subscriptions and requests of alice, dave and
+# erin do not change.
+phase_vt37() {
+  local url n
+  users_markers
+  users_save vt37 alice dave erin
+  users_begin vt37 carol
+  url="$(users_url carol)"
+  jq '.obj.client' "$PANEL_OUT" >"$PRIVATE/vt37-client.json"
+  panel_api GET server/getNewUUID
+  python3 - "$PRIVATE/vt37-client.json" "$PANEL_OUT" "$PRIVATE/vt37-uuids.json" "$PRIVATE/client-update.json" \
+    "$PRIVATE/vt37-sid" <<'PY' || driver_fail 'VT-37: no new UUID and subscription ID'
+import json, os, re, secrets, string, sys
+
+client_path, new_path, uuids_path, body_path, sid_path = sys.argv[1:6]
+with open(client_path) as f:
+    client = json.load(f)
+with open(new_path) as f:
+    new = json.load(f)['obj']['uuid']
+sid = ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(16))
+assert re.fullmatch('[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', new)
+assert new != client['uuid'] and sid != client['subId']
+
+
+def private(path, text):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write(text)
+
+
+private(uuids_path, json.dumps({'old': client['uuid'], 'new': new}))
+# As client_edit: the stored record without the fields clients/update does
+# not take, with the new UUID as id.
+body = {k: v for k, v in client.items() if k not in ('id', 'uuid', 'reverse', 'allowedIPs', 'keepAlive')}
+body.update(id=new, subId=sid)
+private(body_path, json.dumps(body))
+private(sid_path, sid)
+PY
+  panel_api POST clients/update/carol "$PRIVATE/client-update.json"
+  panel_api GET clients/get/carol
+  python3 - "$PANEL_OUT" "$PRIVATE/vt37-uuids.json" "$PRIVATE/vt37-sid" <<'PY' ||
+import json, sys
+
+with open(sys.argv[1]) as f:
+    c = json.load(f)['obj']['client']
+with open(sys.argv[2]) as f:
+    u = json.load(f)
+with open(sys.argv[3]) as f:
+    sid = f.read()
+sys.exit(0 if c.get('uuid') == u['new'] and c.get('subId') == sid and c.get('enable') is True else 1)
+PY
+    fail 'VT-37: the panel does not return the new UUID and subscription ID of carol'
+  users_after vt37 carol
+
+  sub_fetch "$url" "$PRIVATE/vt37-old.yaml"
+  n="$(users_sub vt37-old "$PRIVATE/vt37-old.yaml" "$PRIVATE/vt37-uuids.json")"
+  [ "$n" = 0 ] || fail "VT-37: carol's old address still returns $n VLESS proxies"
+
+  printf '%s/%s' "${url%/*}" "$(cat "$PRIVATE/vt37-sid")" >"$PRIVATE/users-url-carol"
+  sub_fetch "$(users_url carol)" "$PRIVATE/vt37-new.yaml"
+  [ "$SUB_HTTP" = 200 ] || fail "VT-37: carol's new address gave HTTP $SUB_HTTP"
+  users_sub vt37-new "$PRIVATE/vt37-new.yaml" "$PRIVATE/vt37-uuids.json" >/dev/null
+  jq -e '[.proxies[] | select(.type == "vless")] | length == 1 and .[0].uuid == "new"' \
+    "$phase_dir/vt37-new.json" >/dev/null || fail "VT-37: carol's new address does not return one node with her new UUID"
+  users_up carol
+  edge_begin vt37-new
+  local works=0
+  users_get vt37-carol-new "$(users_port carol)" || works=1
+  edge_end
+  mihomo_log carol
+  [ "$works" = 0 ] || fail "VT-37: carol's request with the new UUID failed"
+  grep -qE "accepted tcp:probe\.example:80 \[$(xray_tag 443) >> direct\] email: carol\$" \
+    "$phase_dir/vt37-new-access.txt" || fail 'VT-37: the access log has no connection of carol with the new UUID'
+
+  users_same vt37 alice dave erin
+  users_markers
+  scan_markers
+}
+
+# VT-38: dave deleted through the panel API (clients/del) and gone from the
+# database. As VT-36; the subscriptions and requests of alice, carol (at her
+# new address) and erin do not change.
+phase_vt38() {
+  users_markers
+  users_save vt38 alice carol erin
+  users_begin vt38 dave
+  panel_api POST clients/del/dave
+  [ "$(users_db_count dave)" = 0 ] || fail 'VT-38: dave is still in the clients table'
+  users_after vt38 dave
+  users_unusable vt38 dave
+  users_same vt38 alice carol erin
+  users_markers
+  scan_markers
 }
 
 main "$@"
