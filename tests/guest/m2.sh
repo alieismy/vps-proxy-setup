@@ -1872,10 +1872,10 @@ phase_fr13_prep() {
 # diagnostics, as units that outlive the phase's session until the next
 # isolation_on: a capture of the queries that local processes send to the
 # resolver stub on loopback, and every 0.2 s the sockets to port 53 with
-# their processes. It also sets the resolver's log level to debug, which
-# names what is looked up, also for clients that ask over D-Bus or Varlink
-# rather than port 53. isolation_counts archives all three; they are not
-# judged.
+# their processes. isolation_counts archives both; they are not judged. It
+# also sets the resolver's log level to debug, which names what is looked
+# up, also for clients that ask over D-Bus or Varlink rather than port 53;
+# isolation_judge reads that log.
 ISOLATION_SINCE=''
 readonly DNS_DIAG_UNITS=(vps-dnsdiag-capture vps-dnsdiag-sockets)
 isolation_on() {
@@ -1892,6 +1892,11 @@ isolation_on() {
     fi
     "$cmd" -w -Z "$ISOLATION_CHAIN"
   done
+  # Debian's apt-listchanges.timer starts apt-listchanges.service every hour
+  # until the service has fetched its database; in run 41580793882 those
+  # fetches made systemd-resolved send 504 rejected DNS queries. Like the
+  # time sync, it stops for the cases.
+  systemctl stop apt-listchanges.timer apt-listchanges.service 2>/dev/null || true
   for unit in "${DNS_DIAG_UNITS[@]}"; do
     systemctl stop "$unit" 2>/dev/null || true
     systemctl reset-failed "$unit" 2>/dev/null || true
@@ -1906,7 +1911,8 @@ isolation_on() {
     sleep 0.2
   done
   grep -qs 'listening on' "$PRIVATE/dnsdiag.err" || driver_fail 'the DNS capture on loopback did not start'
-  resolvectl log-level debug 2>/dev/null || true
+  resolvectl log-level debug
+  [ "$(resolvectl log-level)" = debug ] || driver_fail 'the log level of systemd-resolved is not debug'
   ISOLATION_SINCE="$(date '+%Y-%m-%d %H:%M:%S')"
 }
 
@@ -1930,7 +1936,33 @@ isolation_counts() {
   tcpdump -nn -tt -r "$PRIVATE/dnsdiag.pcap" 'dst port 53' >"$phase_dir/$1-dns-queries.txt" 2>/dev/null || true
   awk '{ $5 = ""; print }' "$PRIVATE/dnsdiag-sockets.txt" 2>/dev/null | sort | uniq -c >"$phase_dir/$1-dns-sockets.txt" || true
   journalctl -q -u systemd-resolved --since "$ISOLATION_SINCE" -o short-iso >"$phase_dir/$1-resolved.txt" 2>/dev/null || true
+  [ "$(resolvectl log-level)" = debug ] || driver_fail 'systemd-resolved left the debug level during the cases'
+  [ -z "$(journalctl -q --since "$ISOLATION_SINCE" -g '^Suppressed [0-9]+ messages from .*systemd-resolved' 2>/dev/null)" ] ||
+    driver_fail 'the journal suppressed messages of systemd-resolved, so its log is incomplete'
   printf '%s %s\n' "$dns" "$other"
+}
+
+# isolation_judge LABEL NAME DOMAIN...: the egress isolation as the owner
+# decided on 2026-11-02 (detailed design 9.10). systemd-resolved sends every
+# DNS query of the guest upstream, so the DNS count cannot tell the cases
+# from background lookups, such as the public-IP check that 3X-UI's status
+# task runs every few minutes. The isolation passes when it rejected nothing
+# but DNS and the resolver's log since isolation_on has no lookup of any of
+# the test domains DOMAIN; the rejected DNS queries and the names asked for
+# are archived, not judged.
+isolation_judge() {
+  local label="$1" name="$2" n domain
+  n="$(isolation_counts "$name")"
+  [ "${n#* }" = 0 ] || fail "$label: the egress isolation rejected ${n#* } connections other than DNS"
+  for domain in "${@:3}"; do
+    ! resolved_asked "$name" "$domain" || fail "$label: systemd-resolved was asked for $domain"
+  done
+}
+
+# resolved_asked NAME DOMAIN: whether the resolver's log that
+# isolation_counts NAME archived has a lookup of DOMAIN.
+resolved_asked() {
+  grep -qiF -- "Looking up RR for $2 IN " "$phase_dir/$1-resolved.txt"
 }
 
 # fr13_begin NAME / fr13_end: edge_begin and edge_end for the dual-stack
@@ -2089,7 +2121,7 @@ phase_vt32() {
   mihomo_log main
 
   m2_check check
-  [ "$(isolation_counts vt32)" = '0 0' ] || fail 'VT-32: the egress isolation rejected connections of the guest'
+  isolation_judge VT-32 vt32 "$openai" "$anthropic"
 
   ip -6 addr add "$GUEST6_EXTRA/64" dev vps-standin0 nodad
   m2_check check-extra
@@ -2105,8 +2137,7 @@ phase_vt32() {
     "$GUEST6" | "$GUEST6_EXTRA") fr13_tcp VT-32 vt32-extra "$openai" 1 6 "$seen" ;;
     *) fail "VT-32: after the second address the stand-in saw the source $seen" ;;
   esac
-  [ "$(isolation_counts vt32-extra)" = '0 0' ] ||
-    fail 'VT-32: the egress isolation rejected connections of the guest after the second address'
+  isolation_judge 'VT-32 after the second address' vt32-extra "$openai" "$anthropic"
 }
 
 # VT-32, UDP: tests/guest/udpsend.py sends ten datagrams to each test domain,
@@ -2123,7 +2154,7 @@ phase_vt32() {
 # datagram reaches the stand-in. A test domain in the access log means
 # Mihomo has stopped resolving UDP itself: review D40.
 phase_vt32_udp() {
-  local openai anthropic n
+  local openai anthropic
   openai="$(geo_pick site openai)"
   anthropic="$(geo_pick site anthropic)"
   stop_time_sync
@@ -2135,9 +2166,8 @@ phase_vt32_udp() {
   fr13_udp_send vt32-udp "$openai" "$anthropic"
   fr13_end
   mihomo_log main
-  n="$(isolation_counts vt32-udp)"
+  isolation_judge 'VT-32 UDP' vt32-udp "$openai" "$anthropic"
   fr13_udp_judge 'VT-32 UDP' vt32-udp "$openai" "$anthropic"
-  [ "$n" = '0 0' ] || fail 'VT-32 UDP: the egress isolation rejected connections of the guest'
 }
 
 # fr13_udp_hosts NAME...: Mihomo's hosts table for the UDP cases, each NAME
@@ -2244,7 +2274,7 @@ phase_vt33() {
     fail 'VT-33: http://probe.example/ over the node failed'
   grep -qF "accepted tcp:probe.example:80 [$reality >> direct]" "$phase_dir/vt33-others-access.txt" ||
     fail 'VT-33: the access log does not show probe.example from the REALITY inbound to direct'
-  [ "$(isolation_counts vt33)" = '0 0' ] || fail 'VT-33: the egress isolation rejected connections of the guest'
+  isolation_judge VT-33 vt33 "$openai"
 }
 
 # VT-33 ②: the same overlay deployed with FR-13 off.
@@ -2290,7 +2320,7 @@ phase_vt33_off() {
     fail "VT-33: with FR-13 off the access log does not route each request for $openai to direct"
   m2_check check
   fr13_says_off check
-  [ "$(isolation_counts vt33-off)" = '0 0' ] || fail 'VT-33: the egress isolation rejected connections of the guest'
+  isolation_judge 'VT-33 with FR-13 off' vt33-off "$openai"
 }
 
 # standin6_filter -I|-D TARGET...: insert or delete the rule of the stand-in's
@@ -2351,8 +2381,9 @@ vt34_case() {
 # route, where UDP is judged as in VT-32 (D40), a test domain with only the
 # IPv4 stand-in still succeeds over IPv4, and tests/vm.py judges check; no
 # hosts record, where the lookup goes to DNS, which the egress isolation
-# rejects. The isolation counts nothing before that last case, and there
-# only DNS queries.
+# rejects. Before that last case the isolation passes as in isolation_judge;
+# in it, the isolation rejects DNS queries and nothing else, and the
+# resolver's log has the lookup of the test domain.
 phase_vt34() {
   local openai anthropic n
   openai="$(geo_pick site openai)"
@@ -2387,7 +2418,7 @@ phase_vt34() {
   standin6_filter -D -j DROP
   fr13_hosts "$openai" 4 "$BLOCKED6"
   vt34_case vt34-blocked "$openai" 20 "blocked target: tcp:[$BLOCKED6]:80"
-  [ "$(isolation_counts vt34)" = '0 0' ] || fail 'VT-34: the egress isolation rejected connections of the guest'
+  isolation_judge VT-34 vt34 "$openai" "$anthropic"
 
   fr13_hosts "$openai" 4 6
   fr13_hosts "$anthropic" 4
@@ -2411,8 +2442,7 @@ phase_vt34() {
   ip -6 addr add "$GUEST6/64" dev vps-standin0 nodad
   ip -6 route add default via "$STANDIN6" dev vps-standin0
   [ "$(vps_fn ipv6_egress_facts)" = '1 0 1' ] || driver_fail 'the IPv6 address and route did not come back'
-  [ "$(isolation_counts vt34-noipv6)" = '0 0' ] ||
-    fail 'VT-34: without IPv6 the egress isolation rejected connections of the guest'
+  isolation_judge 'VT-34 without IPv6' vt34-noipv6 "$openai" "$anthropic"
 
   mihomo_up main 7890
   fr13_hosts "$openai"
@@ -2421,6 +2451,8 @@ phase_vt34() {
   n="$(isolation_counts vt34-nodns)"
   [ "${n% *}" -gt 0 ] && [ "${n#* }" = 0 ] ||
     fail "VT-34 vt34-nodns: the egress isolation rejected ${n% *} DNS queries and ${n#* } other connections; expected DNS queries only"
+  resolved_asked vt34-nodns "$openai" || fail "VT-34 vt34-nodns: the resolver's log has no lookup of $openai"
+  ! resolved_asked vt34-nodns "$anthropic" || fail "VT-34 vt34-nodns: systemd-resolved was asked for $anthropic"
 }
 
 main "$@"
