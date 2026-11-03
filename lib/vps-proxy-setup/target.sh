@@ -331,11 +331,13 @@ cmd_target_check() {
 
 # target_record_check FILE TARGET: whether FILE is a valid record (detailed
 # design 2.7). Sets VPS_TR_STATE to "pass", "fail" or "invalid", with
-# VPS_TR_REASON, VPS_TR_AGE (seconds) and VPS_TR_WARNS (item IDs with WARN).
+# VPS_TR_REASON, VPS_TR_AGE (seconds), VPS_TR_WARNS (item IDs with WARN) and
+# VPS_TR_TIME (the time of the record; deploy writes it into deploy.conf).
 VPS_TR_STATE=''
 VPS_TR_REASON=''
 VPS_TR_AGE=0
 VPS_TR_WARNS=''
+VPS_TR_TIME=''
 target_record_check() {
   local file="$1" target="$2" attrs line key value id level when now
   local pass=0 fail=0 warn=0 skip=0
@@ -343,6 +345,7 @@ target_record_check() {
   VPS_TR_STATE=invalid
   VPS_TR_WARNS=''
   VPS_TR_AGE=0
+  VPS_TR_TIME=''
   if [ -L "$file" ] || [ ! -e "$file" ]; then
     VPS_TR_REASON='没有核实结果'
     return 0
@@ -427,6 +430,7 @@ target_record_check() {
     return 0
   fi
   VPS_TR_AGE=$((now - when))
+  VPS_TR_TIME="${rec[time]}"
   if [ "${rec[result]}" = PASS ] && [ "$fail" -eq 0 ]; then
     VPS_TR_STATE=pass
   elif [ "${rec[result]}" = FAIL ] && [ "$fail" -gt 0 ]; then

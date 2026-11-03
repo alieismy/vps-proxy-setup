@@ -59,6 +59,25 @@ vps_fn() {
   )
 }
 
+# deploy_fn FUNC ARGS...: FUNC in a subshell with every module of the tool
+# loaded, as bin/vps-proxy-setup loads them; the M2 drivers call the deploy
+# steps this way (detailed design 19).
+deploy_fn() {
+  (
+    . "$LIB/common.sh"
+    . "$LIB/pins.sh"
+    . "$LIB/platform.sh"
+    . "$LIB/inputs.sh"
+    . "$LIB/probe.sh"
+    . "$LIB/xuidb.sh"
+    . "$LIB/preflight.sh"
+    . "$LIB/check.sh"
+    . "$LIB/target.sh"
+    . "$LIB/deploy.sh"
+    "$@"
+  )
+}
+
 # pin_value NAME: a pinned value of pins.sh, through vps_fn.
 pin_value() {
   printf '%s
@@ -85,19 +104,21 @@ capture() {
 }
 
 # on_tty ERR CMD...: CMD on a new pseudo-terminal, as deploy requires. The
-# only input is end of file. The command's stderr goes to the file ERR instead
-# of the terminal, so the two streams can be told apart. CMD is executed
-# directly: it cannot be a shell function.
+# only input is end of file, or with TTY_INPUT set in the environment that one
+# line, as the administrator would type it. The command's stderr goes to the
+# file ERR instead of the terminal, so the two streams can be told apart. CMD
+# is executed directly: it cannot be a shell function.
 on_tty() {
   timeout --kill-after=10 600 python3 -c '
 import os, pty, sys
+answer = os.environ.pop("TTY_INPUT", None)
 pid, fd = pty.fork()
 if pid == 0:
     f = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.dup2(f, 2)
     os.close(f)
     os.execvp(sys.argv[2], sys.argv[2:])
-os.write(fd, b"\x04")
+os.write(fd, b"\x04" if answer is None else answer.encode() + b"\n")
 out = bytearray()
 while True:
     try:
@@ -178,7 +199,9 @@ expect_no_secret() {
 # Everything a read-only command must leave as it was (verification plan 4,
 # detailed design 9.4). Excluded: /etc/resolv.conf and /etc/adjtime; the
 # content of the 3X-UI database files, compared by db_digest instead; the
-# panel's metrics file, which it rewrites every minute; rule counters.
+# panel's metrics file, which it rewrites every minute; rule counters; the
+# UDP socket that systemd-timesyncd binds to a wildcard ephemeral port for
+# each time request and closes on the reply (run 41595764537).
 snapshot() {
   local name="$1" unit
   {
@@ -198,7 +221,8 @@ snapshot() {
         "$(systemctl is-active "$unit" 2>/dev/null || true)"
     done
     echo '== listeners'
-    ss -Hltnu | awk '{ print $1, $5 }' | sort -u || echo "ss exit $?"
+    ss -Hltnup | awk '!($1 == "udp" && /users:[(][(]"systemd-timesyn",/) { print $1, $5 }' | sort -u ||
+      echo "ss exit $?"
     echo '== packages'
     dpkg-query -W -f '${Package}:${Architecture} ${Version} ${db:Status-Abbrev}\n' || echo "dpkg-query exit $?"
   } >"$phase_dir/snap-$name.txt" 2>&1
@@ -517,7 +541,7 @@ phase_hardening_install() {
   settle
   fixture_check
   bash "$FIXTURES/vps-hardening-install.sh"
-  [ "$("$VH" --version)" = 'vps-hardening 0.1.1' ] || fail 'vps-hardening is not 0.1.1'
+  [ "$("$VH" --version)" = 'vps-hardening 0.2.0-rc.1' ] || fail 'vps-hardening is not 0.2.0-rc.1'
 }
 
 installed_files() {
@@ -624,7 +648,7 @@ make_test_ca() {
     -addext 'keyUsage=critical,keyCertSign,cRLSign' -keyout "$CA_DIR/ca.key" -out "$CA_DIR/ca.crt" 2>/dev/null
   openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj '/CN=target.example' \
     -keyout "$CA_DIR/leaf.key" -out "$CA_DIR/leaf.csr" 2>/dev/null
-  printf '%s\n' 'subjectAltName=DNS:target.example,DNS:other.example' 'extendedKeyUsage=serverAuth' \
+  printf '%s\n' 'subjectAltName=DNS:target.example,DNS:other.example,DNS:probe.example' 'extendedKeyUsage=serverAuth' \
     'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature' >"$CA_DIR/leaf.ext"
   openssl x509 -req -in "$CA_DIR/leaf.csr" -CA "$CA_DIR/ca.crt" -CAkey "$CA_DIR/ca.key" -CAcreateserial -days 3 \
     -extfile "$CA_DIR/leaf.ext" -out "$CA_DIR/leaf.crt" 2>/dev/null
@@ -701,10 +725,16 @@ write_input() {
   done
 }
 
-phase_network() {
-  settle
+# The client and stand-in namespaces (verification plan 3.3). They do not
+# survive a reboot; the test CA and the token on the disk do.
+test_namespaces() {
   netns_pair vpsns-client vps-client0 192.0.2.1 192.0.2.2
   netns_pair vpsns-standin vps-standin0 198.51.100.1 "$STANDIN"
+}
+
+phase_network() {
+  settle
+  test_namespaces
   grep -qF ' target.example ' /etc/hosts ||
     printf '%s target.example other.example probe.example\n' "$STANDIN" >>/etc/hosts
   # VT-04 and VT-05 need an unprivileged account; cloud-init's default user has uid 1000.
@@ -980,7 +1010,9 @@ phase_vt01() {
   observe vt01 capture_tty "$TOOL" deploy --input "$input"
   expect_rc vt01 1
   expect_clean vt01
-  expect_err vt01 '[x] 预检通过；之后的步骤在 M2 实现，主机未改动'
+  # The change plan is shown; end of file at the confirmation cancels (detailed design 2.5).
+  expect_err vt01 '输入 yes 继续'
+  expect_err vt01 '[x] 已取消，主机未改动'
   expect_report vt01 PASS "${PREFLIGHT_PASS[@]}"
   expect_report vt01 WARN inputs.node_ip
   expect_report vt01 INFO inputs.sub_host inputs.target inputs.remark inputs.users inputs.ipv6_ai_egress \
@@ -1205,14 +1237,19 @@ phase_s3() {
 # ---------------------------------------------------------------------------
 # VT-71 to VT-76: check on an S1 host (detailed design 9.3, 9.5)
 
-# Leak markers (verification plan 3.4, VT-74): the install result and secret
+# Leak markers (verification plan 3.4, VT-74): the install result (or the copy
+# the M2 tests keep of it, since deploy deletes it), the handoff and secret
 # values of the database, at least 8 characters so that they cannot match by
 # chance. They stay in PRIVATE; tests/vm.py reads them for its own scan.
 collect_markers() {
+  local f
   {
     [ ! -s "$PRIVATE/token-markers" ] || cat "$PRIVATE/token-markers"
-    [ ! -r "$XUI_RESULT" ] ||
-      sed -n 's/^XUI_\(USERNAME\|PASSWORD\|WEB_BASE_PATH\|ACCESS_URL\|API_TOKEN\)=//p' "$XUI_RESULT"
+    for f in "$XUI_RESULT" "$PRIVATE/install-result.env"; do
+      [ ! -r "$f" ] || sed -n 's/^XUI_\(USERNAME\|PASSWORD\|WEB_BASE_PATH\|ACCESS_URL\|API_TOKEN\)=//p' "$f"
+    done
+    [ ! -r /etc/vps-proxy-setup/handoff ] || jq -r '.panel.username, .panel.password, .panel.webBasePath,
+      (.users[] | .subscriptionUrl, .mihomoUrl)' /etc/vps-proxy-setup/handoff
     [ ! -e "$XUI_DB" ] || db_secret_values
   } | sed 's#^/##; s#/$##' | awk 'length($0) >= 8' | sort -u >"$PRIVATE/markers"
   printf '%s markers\n' "$(wc -l <"$PRIVATE/markers")" >"$phase_dir/markers.txt"
@@ -1228,7 +1265,9 @@ con = sqlite3.connect(sys.argv[1], uri=True, timeout=5)
 queries = ["SELECT value FROM settings WHERE key IN ('webBasePath', 'subPath', 'subClashPath', 'subJsonPath', "
            "'secret', 'subURI', 'subClashURI', 'subJsonURI')",
            'SELECT username FROM users', 'SELECT password FROM users', 'SELECT uuid FROM clients',
-           'SELECT sub_id FROM clients', 'SELECT token FROM api_tokens']
+           'SELECT sub_id FROM clients', 'SELECT token FROM api_tokens',
+           "SELECT json_extract(stream_settings, '$.realitySettings.privateKey') FROM inbounds",
+           "SELECT json_extract(stream_settings, '$.realitySettings.shortIds[0]') FROM inbounds"]
 for query in queries:
     try:
         for (value,) in con.execute(query):
@@ -1575,9 +1614,14 @@ main() {
     vt72) phase_vt72 ;;
     vt75) phase_vt75 ;;
     inject) phase_inject "${2:?injection name}" ;;
-    *) fail "unknown phase: $phase" ;;
+    *)
+      # Phases of a script that sources this one (tests/guest/m2.sh).
+      declare -F "phase_${phase//-/_}" >/dev/null || fail "unknown phase: $phase"
+      "phase_${phase//-/_}" "${@:2}"
+      ;;
   esac
   log "phase $* passed"
 }
 
-main "$@"
+# Sourced by tests/guest/m2.sh for its helpers; it calls main itself.
+[ "${BASH_SOURCE[0]}" != "$0" ] || main "$@"

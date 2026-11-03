@@ -12,20 +12,29 @@ permissions:
   contents: read
 
 jobs:
-  # M1 on Debian 13 amd64 (detailed design 9.1, 9.3). Both jobs first build
-  # the main configuration: vps-tuning, vps-hardening v0.1.1, this tool from
-  # its release installer.
+  # M1 and M2 on Debian 13 amd64 (detailed design 9.1, 9.3). Every job
+  # first builds the main configuration: vps-tuning, vps-hardening v0.2.0-rc.1,
+  # this tool from its release installer.
   #   m1-preflight: VT-80, VT-81, VT-01 to VT-05.
   #   m1-check: S1 baseline, VT-71 (M1 part), VT-72 to VT-76.
+  #   m2-deploy: VT-10 to VT-13 (deploy steps 1 to 4); the preflight of
+  #   VT-33.
+  #   m2-check: VT-70 and VT-71 (M2 part) after a complete deploy; VT-33
+  #   with the FR-13 outbound and rule added to the template.
+  #   m2-sni: VT-20 to VT-31 after a complete deploy, with Mihomo.
+  #   m2-fr13: VT-32 to VT-34 after a complete deploy with FR-13 enabled,
+  #   IPv6 on the stand-in's veth; VT-33 also deployed with FR-13 off.
+  #   m2-users: VT-35 after a complete deploy with five codes; VT-36 to
+  #   VT-38 with Mihomo.
   vm:
     name: ${{ matrix.suite }}
     strategy:
       fail-fast: false
       matrix:
-        suite: [m1-preflight, m1-check]
+        suite: [m1-preflight, m1-check, m2-deploy, m2-check, m2-sni, m2-fr13, m2-users]
     runs-on: ubuntu-24.04
     # m1-check boots about twenty guests: the main configuration, S1 and one
-    # overlay per injection.
+    # overlay per injection; m2-check about thirty in the same way.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4

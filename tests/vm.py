@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""M1 VM tests: run vps-proxy-setup in disposable QEMU guests.
+"""M1 and M2 VM tests: run vps-proxy-setup in disposable QEMU guests.
 
 Adapted from vps-hardening's tests/vm.py (detailed design 9.1); Debian 13
 amd64 only (NFR-03). Both suites first build the main configuration of
 verification plan 3.2 on an overlay of the official image: vps-tuning applied,
-rebooted and verified; vps-hardening v0.1.1 applied on a pseudo-terminal and
+rebooted and verified; vps-hardening v0.2.0-rc.1 applied on a pseudo-terminal and
 confirmed from a new SSH session; this tool installed by its release installer
 from a local asset directory. Suites:
 
@@ -17,8 +17,29 @@ from a local asset directory. Suites:
                 overlays of it the baseline with VT-74 to VT-76 and VT-73,
                 VT-72 with DO-1 and VT-75, then one overlay per VT-71
                 injection, each judged here against the baseline.
+  m2-deploy     one guest with the namespaces, the stand-in and a fresh
+                target-check result: VT-11; then one overlay of it each for
+                VT-10 (deploy steps 1 to 4, with VT-13 on its output), VT-12
+                (with VT-13 on the real installer output) and VT-13 with a
+                failing installer.
+  m2-check      one guest with the namespaces, the stand-in and a fresh
+                target-check result: a complete deploy and check (VT-70);
+                then on overlays of it the baseline of M2 and one overlay per
+                VT-71 injection of M2, each judged here against the baseline.
+  m2-sni        one guest: a complete deploy, 443/tcp added with
+                vps-hardening ports and confirmed from a new session, the
+                test deviations, then VT-20 to VT-31 in turn.
+  m2-fr13       one guest with an IPv6 /64 on the stand-in's veth: a
+                complete deploy with FR-13 enabled, 443/tcp added as in
+                m2-sni, the dual-stack stand-in and the deviations, then
+                VT-32 with the egress isolation; its two check results are
+                judged here.
+  m2-users      one guest: a complete deploy with five codes and VT-35, then
+                443/tcp and the deviations as in m2-sni, and VT-36 to VT-38
+                in turn.
 
-tests/guest/m1.sh is the guest side and judges everything except VT-71.
+tests/guest/m1.sh is the guest side of M1 and judges everything except
+VT-71; tests/guest/m2.sh, which sources it, the guest side of M2.
 Evidence goes to .tmp/vm/evidence; it is scanned for the test secrets, also
 when the suite fails, and listed with sizes and digests (verification plan 6).
 """
@@ -47,6 +68,8 @@ GUEST_EVIDENCE = '/root/vps-evidence'
 GUEST_MARKERS = '/root/vps-private/markers'
 VH = '/usr/local/bin/vps-hardening'
 APPLY_PROMPT = '两项都满足请输入 yes'.encode()
+PORTS_APPLIED = '端口变更已生效，等待确认'
+PORTS_CONFIRMED = '已确认，端口变更生效'
 APPLIED = '加固已应用，等待确认'
 CONFIRMED = '已确认'
 
@@ -72,12 +95,22 @@ FIXTURES = {
         'https://github.com/alieismy/vps-tuning/releases/download/v0.2.0-rc.4/install.sh',
         '06c8b235ce0538d6e5247b3b50fa568e6c71f9ee9f28b4cc999f031b5e9978ec'),
     'vps-hardening-install.sh': (
-        'https://github.com/alieismy/vps-hardening/releases/download/v0.1.1/install.sh',
-        '338e20ddfbb1513be7dfd5a41fd33f6c9d95ce76bdf8ab0d4576ba08cf83dcfc'),
+        'https://github.com/alieismy/vps-hardening/releases/download/v0.2.0-rc.1/install.sh',
+        'bcc95fcd6350b5e6e5388a8477460557f09ebb58189f38bd2b82e50f047fb9e4'),
     '3x-ui-install.sh': (
         f"https://raw.githubusercontent.com/MHSanaei/3x-ui/{PINS['VPS_PIN_XUI_COMMIT']}/install.sh",
         PINS['VPS_PIN_XUI_INSTALL_SHA256']),
 }
+# Further fixtures of one suite. Mihomo, the test client (VO-3): the newest
+# release, v1.19.33 of 2026-10-21; the build for amd64 without newer
+# instruction sets, digest from the release asset.
+MIHOMO = {
+    'mihomo-linux-amd64-compatible-v1.19.33.gz': (
+        'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/'
+        'mihomo-linux-amd64-compatible-v1.19.33.gz',
+        '386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6'),
+}
+SUITE_FIXTURES = {'m2-sni': MIHOMO, 'm2-fr13': MIHOMO, 'm2-users': MIHOMO}
 # The M1 baseline of check on S1 (detailed design 9.5, with the items of
 # FR-13). An inferred expectation: a difference fails the run, and the
 # design is corrected from the archived baseline.
@@ -112,6 +145,78 @@ INJECTIONS = {
     'cf-credentials': {'absent.cf-credentials'},
     'ufw-rule': {'hardening.verify'},
 }
+# The M2 baseline of check after deploy steps 1 to 7, before cloudflared
+# (VT-70, detailed design 9.6). An inferred expectation, corrected from the
+# archived baseline as at M1.
+M2_BASELINE = {
+    'PASS': 'root platform deps xui.version xui.files xui.unit xui.env xui.service xui.ipl xui.db panel.listen '
+            'inbounds.set reality.settings reality.share reality.hosts forwarder.settings routing.rules '
+            'routing.outbounds clients.flow clients.limit-ip sub.enable sub.listen sub.cert sub.domain sub.uri '
+            'sub.paths sub.clash sub.json sub.info-node sub.updates sub.remark listen.reality listen.forwarder '
+            'listen.sub listen.api listen.metrics secrets.install-result secrets.api-tokens absent.acme '
+            'absent.cf-credentials state.perms record.consistent hardening.verify',
+    'FAIL': 'cfd.files cfd.unit cfd.service cfd.autoupdate cfd.token cfd.metrics cfd.ready cfd.routes',
+    'SKIP': 'routing.ai-ipv6 ipv6.egress sub.rules',
+    'WARN': 'secrets.handoff',
+    'INFO': 'clients.count',
+}
+# VT-71 at M2 (detailed design 9.6): injection -> the items that leave PASS,
+# for FAIL, or for the level given.
+M2_INJECTIONS = {
+    'inbound-extra': {'inbounds.set'},
+    'reality-disabled': {'inbounds.set', 'listen.reality'},
+    'server-names': {'reality.settings'},
+    'share-host': {'reality.share', 'record.consistent'},
+    'exclude-sub': {'reality.share'},
+    'host-domain': {'reality.hosts'},
+    'forwarder-dest': {'forwarder.settings'},
+    'forwarder-target': {'forwarder.settings'},
+    'forwarder-listen': {'inbounds.set', 'listen.forwarder'},
+    'rules-order': {'routing.rules'},
+    'rules-cn': {'routing.rules'},
+    'outbound-blocked': {'routing.outbounds'},
+    'api-listen': {'listen.api'},
+    'metrics-listen': {'listen.metrics'},
+    'client-flow': {'clients.flow'},
+    'client-limit-ip': {'clients.limit-ip'},
+    'sub-listen': {'sub.listen', 'listen.sub'},
+    'sub-domain': {'sub.domain', 'sub.uri', 'record.consistent'},
+    'sub-uri': {'sub.uri'},
+    'sub-clash': {'sub.clash'},
+    'sub-remark': {'sub.remark'},
+    'api-token': {'secrets.api-tokens': 'WARN'},
+    'install-result': {'secrets.install-result'},
+    'state-perms': {'state.perms'},
+    'record-node-ip': {'record.consistent'},
+}
+
+
+def moved(table, moves):
+    """TABLE (level -> items) with each item of MOVES at its new level."""
+    levels = {item: level for level, items in table.items() for item in items.split()}
+    levels.update(moves)
+    out = {}
+    for item, level in sorted(levels.items()):
+        out.setdefault(level, []).append(item)
+    return {level: ' '.join(items) for level, items in out.items()}
+
+
+# VT-32 (detailed design 9.9): check on the overlay with FR-13 enabled is the
+# M2 baseline with the FR-13 routing item and the local IPv6 item passing;
+# with a second address on the IPv6 /64 the local IPv6 item warns.
+FR13_BASELINE = moved(M2_BASELINE, {'routing.ai-ipv6': 'PASS', 'ipv6.egress': 'PASS'})
+FR13_EXTRA = moved(FR13_BASELINE, {'ipv6.egress': 'WARN'})
+# VT-34 (detailed design 9.10): without the guest's IPv6 address and route the
+# local IPv6 item fails. VT-33: the outbound and rule of FR-13 added to the
+# template of a host deployed with FR-13 off fail the routing item, and the
+# local IPv6 item stays SKIP.
+FR13_NOIPV6 = moved(FR13_BASELINE, {'ipv6.egress': 'FAIL'})
+VT33_ADDED = moved(M2_BASELINE, {'routing.ai-ipv6': 'FAIL'})
+# The FR-13 part of VT-71 (detailed design 9.11): each injection fails only
+# the FR-13 routing item, against the check of VT-32.
+FR13_INJECTIONS = {name: {'routing.ai-ipv6'} for name in (
+    'ai-strategy', 'ai-send-through', 'ai-happy-eyeballs', 'ai-final-rules', 'ai-inbound-tag', 'ai-category',
+    'ai-rule-last', 'ai-outbound-first', 'ai-dns')}
 REPORT_LINE = re.compile(r'^\[(PASS|FAIL|WARN|SKIP|INFO)\] (\S+)', re.M)
 
 
@@ -240,15 +345,15 @@ class Guest:
         tail = '\n'.join(text.splitlines()[-lines:])
         print(f'--- {self.label} {title}\n{self.ctx.redact(tail)}', flush=True)
 
-    def phase(self, name, *args, required=False, timeout=1800):
-        """Run one phase of tests/guest/m1.sh in a new session. A failed
+    def phase(self, name, *args, required=False, timeout=1800, script='m1.sh'):
+        """Run one phase of tests/guest/SCRIPT in a new session. A failed
         phase fails the run; a required one also stops it."""
         words = (name,) + args
         title = ' '.join(words)
         self.collected.append('-'.join(words))
         print('START', self.label, title, flush=True)
         log_path = self.evidence / ('-'.join(words) + '.log')
-        command = f'bash {BUNDLE}/tests/guest/m1.sh {title}'
+        command = f'bash {BUNDLE}/tests/guest/{script} {title}'
 
         def body():
             with log_path.open('wb') as log:
@@ -429,16 +534,17 @@ class Context:
         files = sorted([ROOT / 'install.sh'] + [
             p for d in ('bin', 'lib', 'tests/guest') for p in (ROOT / d).rglob('*')
             if p.is_file() and '__pycache__' not in p.parts])
+        pinned = dict(FIXTURES, **SUITE_FIXTURES.get(self.suite, {}))
         fixtures = {}
-        for name, (url, digest) in FIXTURES.items():
+        for name, (url, digest) in pinned.items():
             with urllib.request.urlopen(url, timeout=60) as response:
                 data = response.read()
             if sha256(data) != digest:
                 raise RuntimeError(f'{name}: checksum mismatch')
             fixtures[name] = data
-        fixtures['SHA256SUMS'] = ''.join(f'{FIXTURES[n][1]}  {n}\n' for n in sorted(FIXTURES)).encode()
+        fixtures['SHA256SUMS'] = ''.join(f'{pinned[n][1]}  {n}\n' for n in sorted(pinned)).encode()
         (self.evidence / 'fixtures.json').write_text(json.dumps(
-            {name: {'url': url, 'sha256': digest} for name, (url, digest) in FIXTURES.items()}, indent=2))
+            {name: {'url': url, 'sha256': digest} for name, (url, digest) in pinned.items()}, indent=2))
         with tarfile.open(path, 'w') as tar:
             def add(name, data, mode):
                 info = tarfile.TarInfo(name)
@@ -517,27 +623,32 @@ def transitions(base, got):
             if base.get(item) != got.get(item)}
 
 
-def judge_baseline(ctx, got):
+def judge_baseline(ctx, got, table=BASELINE, section='9.5', title='VT-71 baseline', name='baseline'):
     if got is None:
-        ctx.fail('VT-71: no baseline')
+        ctx.fail(f'{title}: no check output')
         return
-    want = {item: level for level, items in BASELINE.items() for item in items.split()}
+    want = {item: level for level, items in table.items() for item in items.split()}
     diff = transitions(want, got)
-    record(ctx, 'baseline', {'verdicts': got, 'differences from detailed design 9.5 [expected, actual]': diff})
-    ctx.expect(not diff, 'VT-71 baseline as in detailed design 9.5' + (f'; differences: {diff}' if diff else ''))
+    record(ctx, name, {'verdicts': got, f'differences from detailed design {section} [expected, actual]': diff})
+    ctx.expect(not diff, f'{title} as in detailed design {section}' + (f'; differences: {diff}' if diff else ''))
 
 
 def judge_injection(ctx, name, base, got, expected):
-    """Only the expected items leave PASS, each for FAIL; the item set is unchanged."""
+    """Only the expected items leave PASS, each for its level (FAIL when
+    EXPECTED is a set); the item set is unchanged."""
     if base is None or got is None:
         ctx.fail(f'VT-71 {name}: no baseline or no check output')
         return
+    if isinstance(expected, set):
+        expected = dict.fromkeys(expected, 'FAIL')
+    expected = dict(sorted(expected.items()))
     changed = transitions(base, got)
     left_pass = {item for item, (before, _) in changed.items() if before == 'PASS'}
-    ok = set(got) == set(base) and left_pass == expected and all(got[item] == 'FAIL' for item in expected)
-    record(ctx, name, {'expected PASS -> FAIL': sorted(expected), 'transitions [baseline, injected]': changed,
+    ok = (set(got) == set(base) and left_pass == set(expected) and
+          all(got[item] == level for item, level in expected.items()))
+    record(ctx, name, {'expected from PASS': expected, 'transitions [baseline, injected]': changed,
                        'result': 'PASS' if ok else 'FAIL'})
-    ctx.expect(ok, f'VT-71 {name}: PASS -> FAIL exactly {sorted(expected)}' + ('' if ok else f'; got {changed}'))
+    ctx.expect(ok, f'VT-71 {name}: from PASS exactly {expected}' + ('' if ok else f'; got {changed}'))
 
 
 def judge_vt73(ctx, base, got):
@@ -616,7 +727,174 @@ def m1_check(ctx, main):
                         expected)
 
 
-SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check}
+def m2_deploy(ctx, main):
+    disk = ctx.overlay(main, 'm2.qcow2')
+    with Guest(ctx, 'm2', disk) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('vt11', script='m2.sh')
+        guest.phase('vt33-preflight', script='m2.sh')
+        guest.poweroff()
+    # The input file, the test token and a fresh target-check result are on this disk.
+    names = ('vt10', 'vt12', 'vt13-fail', 'vt15-inbound', 'vt15-client', 'vt15-settings', 'vt17-lost',
+             'vt17-unsent', 'vt18-refused', 'vt18-lost', 'vt18-short-id')
+    for name in names:
+        with Guest(ctx, name, ctx.overlay(disk, f'{name}.qcow2')) as guest:
+            guest.phase(name, script='m2.sh')
+            guest.poweroff()
+    judge_short_ids(ctx, [(name, name) for name in names])
+
+
+def judge_short_ids(ctx, phases, minimum=3):
+    """VT-16: every deploy of the job generated its own shortId. The guests
+    archive only a digest of it; PHASES are (guest, phase) pairs."""
+    digests = {}
+    for guest, phase in phases:
+        for path in sorted((ctx.evidence / guest / 'guest' / phase).glob('*sid-digest.txt')):
+            digests[f'{guest}/{path.name}'] = path.read_text().strip()
+    lines = ''.join(f'{k} {v}\n' for k, v in sorted(digests.items()))
+    (ctx.evidence / 'vt16-short-ids.txt').write_text(lines)
+    if len(digests) < minimum:
+        ctx.fail(f'VT-16: only {len(digests)} shortId digests to compare')
+    elif len(set(digests.values())) != len(digests):
+        ctx.fail('VT-16: two deploys of the job have the same shortId')
+
+
+def m2_check(ctx, main):
+    disk = ctx.overlay(main, 'm2.qcow2')
+    with Guest(ctx, 'm2', disk) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('vt70-deploy', required=True, script='m2.sh')
+        guest.poweroff()
+    judge_baseline(ctx, verdicts(ctx, ctx.evidence / 'm2/guest/vt70-deploy/check.out'), M2_BASELINE, '9.6',
+                   'VT-70 right after the deploy', 'vt70-deploy')
+    # The deployed host; the baseline and each injection boot an overlay of it.
+    with Guest(ctx, 'vt70', ctx.overlay(disk, 'vt70.qcow2')) as guest:
+        guest.phase('vt70', script='m2.sh')
+        guest.poweroff()
+    baseline = verdicts(ctx, ctx.evidence / 'vt70/guest/vt70/check.out')
+    judge_baseline(ctx, baseline, M2_BASELINE, '9.6', 'VT-70 and the VT-71 baseline of M2')
+    for name, expected in M2_INJECTIONS.items():
+        label = f'vt71-{name}'
+        with Guest(ctx, label, ctx.overlay(disk, f'{label}.qcow2')) as guest:
+            guest.phase('vt71', name, script='m2.sh')
+            guest.poweroff()
+        judge_injection(ctx, name, baseline, verdicts(ctx, ctx.evidence / f'{label}/guest/{label}/check.out'),
+                        expected)
+    # VT-33 ③ through the same injection phase: the items move from SKIP, which
+    # judge_injection does not cover, so the result is compared as a table.
+    label = 'vt71-ai-ipv6-off'
+    with Guest(ctx, label, ctx.overlay(disk, f'{label}.qcow2')) as guest:
+        guest.phase('vt71', 'ai-ipv6-off', script='m2.sh')
+        guest.poweroff()
+    judge_baseline(ctx, verdicts(ctx, ctx.evidence / f'{label}/guest/{label}/check.out'), VT33_ADDED, '9.10',
+                   'VT-33 with the FR-13 outbound and rule added', 'vt33-added')
+
+
+def open_443(ctx, guest):
+    """The administrator's step of verification plan 3.3 opens 443/tcp, as the
+    main configuration applies vps-hardening: on a terminal, confirmed from a
+    new session."""
+    status, output = guest.interactive('ports-add', f'{VH} ports --add 443/tcp')
+    ctx.require(status == 0 and PORTS_APPLIED in output, 'vps-hardening ports added 443/tcp')
+    status, output = guest.command('ports-confirm', f'{VH} confirm')
+    ctx.require(status == 0 and PORTS_CONFIRMED in output, 'the port change confirmed from a new root session')
+
+
+def m2_sni(ctx, main):
+    """VT-20 to VT-31 (detailed design 9.7, 9.8): the guest judges each case."""
+    with Guest(ctx, 'sni', ctx.overlay(main, 'sni.qcow2')) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('sni-deploy', required=True, script='m2.sh')
+        open_443(ctx, guest)
+        guest.phase('sni-prep', required=True, script='m2.sh')
+        for name in ('vt20', 'vt21', 'vt22', 'vt23', 'vt24', 'vt25', 'vt26'):
+            guest.phase(name, script='m2.sh')
+        # VT-27 runs each shape twenty times and is never retried
+        # (verification plan 6).
+        for shape in ('records', 'segments', 'large'):
+            guest.phase('vt27', shape, script='m2.sh')
+        guest.phase('vt28', script='m2.sh')
+        guest.phase('vt29', script='m2.sh')
+        guest.phase('vt30', script='m2.sh')
+        guest.phase('vt31', script='m2.sh')
+        guest.poweroff()
+
+
+def m2_fr13(ctx, main):
+    """VT-32 to VT-34, and on the overlay with FR-13 enabled the regressions
+    and the FR-13 part of VT-71 (detailed design 9.9 to 9.11): the guests judge
+    the routes, the address families, the failures, the egress isolation and
+    the regressions; here the check results."""
+    # The deployed disk: VT-16 right after the deploy, then the
+    # administrator's step that opens 443.
+    disk = ctx.overlay(main, 'fr13.qcow2')
+    with Guest(ctx, 'fr13', disk) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('fr13-net', required=True, script='m2.sh')
+        guest.phase('fr13-deploy', required=True, script='m2.sh')
+        guest.phase('fr13-vt16', script='m2.sh')
+        open_443(ctx, guest)
+        guest.poweroff()
+    # The cases and the regressions on one overlay of it, the injections each
+    # on its own.
+    with Guest(ctx, 'fr13-cases', ctx.overlay(disk, 'fr13-cases.qcow2')) as guest:
+        guest.phase('fr13-boot', required=True, script='m2.sh')
+        guest.phase('fr13-prep', required=True, script='m2.sh')
+        for name in ('vt32', 'vt32-udp', 'vt33', 'vt34', 'vt20', 'vt23', 'vt24', 'vt25', 'vt26', 'vt30', 'vt31'):
+            guest.phase(name, script='m2.sh')
+        guest.poweroff()
+    out = ctx.evidence / 'fr13-cases/guest/vt32'
+    baseline = verdicts(ctx, out / 'check.out')
+    judge_baseline(ctx, baseline, FR13_BASELINE, '9.9', 'VT-32 check', 'vt32-check')
+    judge_baseline(ctx, verdicts(ctx, out / 'check-extra.out'), FR13_EXTRA, '9.9',
+                   'VT-32 check with a second IPv6 address', 'vt32-check-extra')
+    judge_baseline(ctx, verdicts(ctx, ctx.evidence / 'fr13-cases/guest/vt34/check-noipv6.out'), FR13_NOIPV6,
+                   '9.10', 'VT-34 check without IPv6', 'vt34-check-noipv6')
+    for name, expected in FR13_INJECTIONS.items():
+        label = f'vt71-{name}'
+        with Guest(ctx, label, ctx.overlay(disk, f'{label}.qcow2')) as guest:
+            guest.phase('fr13-boot', script='m2.sh')
+            guest.phase('vt71', name, script='m2.sh')
+            guest.poweroff()
+        judge_injection(ctx, name, baseline, verdicts(ctx, ctx.evidence / f'{label}/guest/{label}/check.out'),
+                        expected)
+    # VT-33 ②: the same overlay deployed with FR-13 off.
+    with Guest(ctx, 'fr13-off', ctx.overlay(main, 'fr13-off.qcow2')) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('fr13-net', required=True, script='m2.sh')
+        guest.phase('fr13-off-deploy', required=True, script='m2.sh')
+        guest.phase('fr13-off-vt16', script='m2.sh')
+        open_443(ctx, guest)
+        guest.phase('fr13-prep', required=True, script='m2.sh')
+        guest.phase('vt33-off', script='m2.sh')
+        guest.poweroff()
+    judge_baseline(ctx, verdicts(ctx, ctx.evidence / 'fr13-off/guest/vt33-off/check.out'), M2_BASELINE, '9.10',
+                   'VT-33 check with FR-13 off', 'vt33-off-check')
+    judge_short_ids(ctx, [('fr13', 'fr13-vt16'), ('fr13-off', 'fr13-off-vt16')], 2)
+
+
+def m2_users(ctx, main):
+    """VT-35 to VT-38 (detailed design 9.12): the guest judges each case. The
+    three changes are to three different users, one after another."""
+    with Guest(ctx, 'users', ctx.overlay(main, 'users.qcow2')) as guest:
+        guest.phase('network', required=True)
+        guest.phase('m2-prep', required=True, script='m2.sh')
+        guest.phase('users-deploy', required=True, script='m2.sh')
+        guest.phase('vt35', script='m2.sh')
+        open_443(ctx, guest)
+        guest.phase('users-prep', required=True, script='m2.sh')
+        for name in ('vt36', 'vt37', 'vt38'):
+            guest.phase(name, script='m2.sh')
+        guest.poweroff()
+
+
+SUITES = {'m1-preflight': m1_preflight, 'm1-check': m1_check, 'm2-deploy': m2_deploy, 'm2-check': m2_check,
+          'm2-sni': m2_sni, 'm2-fr13': m2_fr13, 'm2-users': m2_users}
 
 
 def main():

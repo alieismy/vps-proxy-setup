@@ -31,5 +31,5 @@ readonly VPS_PIN_CLOUDFLARED_VERSION='2026.10.5'
 readonly VPS_PIN_CLOUDFLARED_SIZE='40263303'
 readonly VPS_PIN_CLOUDFLARED_SHA256='e1bc0cf084fd9e590554fe769a86b1db46701c3f847a43d902f7b974a4e16298'
 
-# vps-hardening versions this tool was tested with (requirements A-1, D9; DO-7).
-readonly VPS_PIN_HARDENING_TESTED=('0.1.1')
+# vps-hardening versions this tool was tested with (requirements A-1, D42; DO-7).
+readonly VPS_PIN_HARDENING_TESTED=('0.2.0-rc.1')
