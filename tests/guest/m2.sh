@@ -2012,14 +2012,19 @@ phase_vt32() {
 
 # VT-32, UDP: tests/guest/udpsend.py sends ten datagrams to each test domain,
 # on both stand-in addresses, as a domain through Mihomo's SOCKS5 UDP to the
-# stand-in's echo port. Verification plan 4.5: they reach only the IPv6
-# address, and no UDP goes to the IPv4 address. Mihomo resolves the
-# destination of UDP itself before it sends (ResolveUDP in
-# adapter/outbound/vless.go at v1.19.33) and does not read the guest's hosts
-# file, so it gets the two names in its own hosts table, as a client with its
-# own DNS would. The access log then shows what the node received.
+# stand-in's echo port. Mihomo resolves the destination of UDP itself before
+# it sends (ResolveUDP in adapter/outbound/vless.go at v1.19.33) and does not
+# read the guest's hosts file, so it gets the two names in its own hosts
+# table, as a client with its own DNS would. The node then receives an IP
+# literal, which the FR-13 rule does not match: judged as accepted in D40
+# (requirements), not as verification plan 4.5 expects. Every UDP line of the
+# access log is a stand-in address from the REALITY inbound to blocked, by the
+# template's geoip:private rule, since the stand-ins are private addresses (a
+# public address falls through to direct); none names a test domain, and no
+# datagram reaches the stand-in. A test domain in the access log means
+# Mihomo has stopped resolving UDP itself: review D40.
 phase_vt32_udp() {
-  local openai anthropic name n hosts sampler
+  local openai anthropic name n hosts sampler reality total literal
   openai="$(geo_pick site openai)"
   anthropic="$(geo_pick site anthropic)"
   stop_time_sync
@@ -2051,14 +2056,22 @@ phase_vt32_udp() {
   grep -F ' accepted udp:' "$phase_dir/vt32-udp-access.txt" | sed -E 's/^.* accepted //' | sort | uniq -c \
     >"$phase_dir/vt32-udp-node.txt" || true
   n="$(isolation_counts vt32-udp)"
+  reality="$(xray_tag 443)"
   for name in "$openai" "$anthropic"; do
-    jq -se --arg h "$name" '[.[] | select(.host == $h)] | length == 1 and .[0].sent == 10 and .[0].echoed == 10' \
-      "$phase_dir/vt32-udp.jsonl" >/dev/null || fail "VT-32 UDP: not all ten datagrams to $name came back"
+    jq -se --arg h "$name" '[.[] | select(.host == $h)] | length == 1 and .[0].sent == 10 and (.[0] | has("error") | not)' \
+      "$phase_dir/vt32-udp.jsonl" >/dev/null || fail "VT-32 UDP: the client did not send ten datagrams to $name"
+    ! grep -qF " accepted udp:$name:" "$phase_dir/vt32-udp-access.txt" ||
+      fail "VT-32 UDP: the node received $name as the destination; Mihomo no longer resolves UDP itself, review D40"
   done
-  jq -se --arg l "$STANDIN6:$UDP_ECHO_PORT" '[.[] | select(.udp)] | length == 20 and all(.[]; .local == $l)' \
-    "$phase_dir/vt32-udp-standin.jsonl" >/dev/null ||
-    fail "VT-32 UDP: the stand-in did not get the twenty datagrams on $STANDIN6 alone"
-  [ ! -s "$phase_dir/vt32-udp-udp4.txt" ] || fail "VT-32 UDP: a datagram went to the stand-in's IPv4 address"
+  total="$(grep -cF ' accepted udp:' "$phase_dir/vt32-udp-access.txt" || true)"
+  literal="$(grep -cF -e " accepted udp:$STANDIN:$UDP_ECHO_PORT [$reality -> blocked]" \
+    -e " accepted udp:[$STANDIN6]:$UDP_ECHO_PORT [$reality -> blocked]" "$phase_dir/vt32-udp-access.txt" || true)"
+  [ "$total" -ge 2 ] && [ "$literal" = "$total" ] ||
+    fail "VT-32 UDP: not every UDP line of the access log ($literal of $total, at least 2) is a stand-in address to blocked"
+  jq -se 'all(.[]; .udp | not)' "$phase_dir/vt32-udp-standin.jsonl" >/dev/null ||
+    fail 'VT-32 UDP: a datagram reached the stand-in'
+  [ ! -s "$phase_dir/vt32-udp-udp4.txt" ] && [ ! -s "$phase_dir/vt32-udp-udp6.txt" ] ||
+    fail 'VT-32 UDP: the capture has a datagram to the stand-in'
   [ "$n" = '0 0' ] || fail 'VT-32 UDP: the egress isolation rejected connections of the guest'
 }
 
