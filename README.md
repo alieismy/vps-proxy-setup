@@ -1,67 +1,107 @@
-# vps-proxy-setup
+# VPS Proxy Setup
 
-Proxy service setup on a hardened Debian/Ubuntu VPS, using 3X-UI as the example. **Status: requirements v1.6, solution design v1.4 and verification plan v1.3 approved; detailed design v1.1 (v1.0 approved, plus one read rule from the M1 evidence, confirmed), with contracts assigned to milestones. M1 is implemented and passes the VM tests: `deploy` runs the preflight only, plus `check`, `target-check` and `install.sh`; deployment comes in M2. No release yet, so nothing to install.**
+English | [简体中文](README.zh-CN.md)
 
-在已经用 [vps-hardening](https://github.com/alieismy/vps-hardening) 加固的 Debian/Ubuntu VPS 上搭建代理服务，以 3X-UI 为例。
+[![static](https://github.com/alieismy/vps-proxy-setup/actions/workflows/static.yml/badge.svg?branch=master)](https://github.com/alieismy/vps-proxy-setup/actions/workflows/static.yml)
+[![vm](https://github.com/alieismy/vps-proxy-setup/actions/workflows/vm.yml/badge.svg?branch=master)](https://github.com/alieismy/vps-proxy-setup/actions/workflows/vm.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**当前状态：[需求规格说明](docs/requirements.md) v1.6 已批准，[方案设计](docs/solution-design.md) v1.4 已批准，[验证计划](docs/verification-plan.md) v1.3 已批准，[详细设计](docs/detailed-design.md) v1.1（v1.0 已批准，按 M1 的运行证据补的一行读取前提已确认），各契约按里程碑实现和验证。M1 已实现并在虚拟机测试中通过：`deploy` 只做预检，另有 `check`、`target-check` 和 `install.sh`；部署从 M2 开始。还没有发行版，因此还不能安装。**
+Proxy service setup on a VPS that has been hardened with [vps-hardening](https://github.com/alieismy/vps-hardening) and tuned with [vps-tuning](https://github.com/alieismy/vps-tuning), using 3X-UI as the example: one VLESS + REALITY node for 5 to 8 people, a panel reachable only through an SSH tunnel, and subscriptions published over HTTPS through Cloudflare Tunnel.
 
-## 与另外两个仓库的关系
+> This README is translated from the [Chinese README](README.zh-CN.md). The documents under `docs/` and the tool's own messages are in Chinese. Where the two READMEs differ, the Chinese README prevails.
 
-| 仓库 | 用途 |
+**Status: in development. There is no release yet, so there is nothing to install.** M1 is implemented and passes the VM tests: `deploy` runs the preflight only, plus `check`, `target-check` and `install.sh`. Deployment comes in M2; see [Project status](#project-status).
+
+## Planned features
+
+Listed from the [requirements specification](docs/requirements.md). M1 implements only the preflight, the read-only check and the installer; the rest comes in later milestones.
+
+- **3X-UI**: installed at a pinned version with its digest verified; the panel listens on the loopback address only and is reached through an SSH tunnel (FR-01).
+- **First-deployment script**: writes the inbound, users, subscription settings and routing rules on a freshly installed 3X-UI; later changes are made in the panel (FR-12).
+- **Inbound**: one VLESS + REALITY inbound on 443/tcp (FR-02).
+- **Users**: one client per person (UUID and subscription ID), each of which can be disabled or revoked on its own (FR-03).
+- **Subscriptions**: 3X-UI's subscription service listens on the loopback address only and is published over HTTPS through Cloudflare Tunnel, serving Mihomo configurations; cloudflared is pinned and does not update itself (FR-04, FR-05).
+- **Read-only check**: `check` verifies 3X-UI, the subscriptions, the listeners, cloudflared and the hardening state item by item (FR-07).
+- **Backup, restore and migration; upgrade and rollback** (FR-09, FR-10, P1).
+- **Dual-stack egress**: on a dual-stack VPS, connections to OpenAI and Anthropic leave over IPv6 (FR-13, P1).
+
+## Scope
+
+| Item | Description |
 |---|---|
-| [vps-tuning](https://github.com/alieismy/vps-tuning) | 网络调优、诊断与测量 |
-| [vps-hardening](https://github.com/alieismy/vps-hardening) | 基础安全加固：SSH 只用密钥、UFW、Fail2ban、自动安全更新 |
-| vps-proxy-setup（本仓库） | 安装和配置 3X-UI：代理入站、面板、订阅（经 Cloudflare Tunnel 发布） |
+| Platform | Debian 13 x86_64 (NFR-03); Debian 12 and Ubuntu 24.04 are P2. The CI virtual machines run Debian 13 amd64 |
+| Prerequisites | Hardened and confirmed with vps-hardening, then tuned with vps-tuning (versions in A-1 of [requirements §9](docs/requirements.md#9-假设)) |
+| Hosts | First deployment happens on new hosts only; nothing is installed or written on an existing production 3X-UI host |
+| Clients | Clients built on the Mihomo core (Sparkle, FlClash, Clash Verge Rev), with ML-KEM turned on; see [Agreed boundaries](#agreed-boundaries) |
+| Out of scope | See [requirements §8](docs/requirements.md#8-范围外p3) |
 
-建议的执行顺序沿用 vps-hardening 的需求（D27、D41、D42）：
+## Commands
 
-1. 更新系统、安装基础工具并重启；
-2. 加固并确认，这时 UFW 只放行 22/tcp；
-3. 调优：应用 → 重启 → 验证；
-4. 安装并配置 3X-UI 和 cloudflared（本仓库）；完成之后用 `vps-hardening ports --add 443/tcp` 开放节点端口并确认。订阅经 Cloudflare Tunnel 发布，不开放订阅端口（需求 D21、FR-06）；
-5. 调优仓库的严格验证；
-6. 重启后复核。
+There is no release yet; the table describes M1. All three commands run as root.
 
-## 已经约定的边界
+| Command | What it does |
+|---|---|
+| `vps-proxy-setup deploy [--input <file>] [--migrate]` | First deployment, run in an interactive terminal. The current version runs the preflight only and changes nothing on the host |
+| `vps-proxy-setup check` | Read-only check of 3X-UI, the subscriptions, the listeners, cloudflared and the hardening state, item by item |
+| `vps-proxy-setup target-check <host> [--probe-host <host>]` | Checks a candidate REALITY target from this host |
+| `install.sh` | Release installer: places the files after verifying them against `SHA256SUMS` and runs none of the commands above. Publishing and verification from the public URLs come in M4 |
 
-以下各条来自 vps-hardening 已批准的需求（[第 7.2 节](https://github.com/alieismy/vps-hardening/blob/master/docs/requirements.md#72-与-vps-proxy-setup-的约定3x-ui-v3102)、D14、D16、D32），本仓库的需求以它们为前提；3X-UI 的版本按本仓库需求 D10 改变，公开端口和证书按 D21 收窄，仍在约定的范围之内：
+Exit codes: 0 all passed; 1 non-compliant items or refused; 2 usage or input error; 3 internal error. The command contract is in [detailed design §2](docs/detailed-design.md#2-命令契约).
 
-- 3X-UI 安装时带版本参数，运行前按固定的摘要校验 `install.sh`。vps-hardening 约定的是 `v3.10.2`；本仓库改用 `v3.11.0`，因为 v3.10.2 自带的 Xray 已被撤版。v3.11.0 的 `install.sh` 与 v3.10.2 的相同，摘要不变。
-- 安装时设 `XUI_ENABLE_FAIL2BAN=false`，不启用 IP Limit；Fail2ban 由 vps-hardening 管理。
-- 面板端口用加固时记录的值（默认 2053），通过 `XUI_PANEL_PORT` 传入。安装后执行 `x-ui setting -listenIP 127.0.0.1` 并重启 x-ui，使面板只监听回环地址，只经 SSH 隧道访问。
-- 公开端口（例如 443/tcp 和订阅端口 2096/tcp）由管理员用 `vps-hardening ports --add` 开放，并从新的 SSH 会话确认。本仓库不直接改 UFW 规则，不使用 3X-UI 的防火墙菜单和 BBR 菜单。按 D21，本仓库只开放 443/tcp。
-- 80/tcp 不开放。证书用 Cloudflare API Token 走 DNS-01 签发；Token 会保存在 VPS 上，只授予签发证书所需的最小权限，例如只能编辑单个 Zone 的 DNS。按 D21，本仓库不在 VPS 上签发证书，也不保存 API Token：订阅经 Cloudflare Tunnel 发布，HTTPS 由 Cloudflare 边缘提供。
-- Xray 从 v26.9.8 起只接受提供 X25519MLKEM768 密钥交换的 REALITY 客户端（v3.11.0 自带 v26.10.21），客户端要先开启 ML-KEM，例如 Mihomo 设 `support-x25519mlkem768: true`。
+## Companion repositories and order
 
-## 下一步
+The three repositories are used in the order of the table below: harden first, then tune, then set up the proxy (vps-hardening requirements D27; this repository's requirements D11, assessed in [requirements §11.4](docs/requirements.md#114-执行顺序评估先调优还是先安装-3x-ui)).
 
-v1.6（需求 U20、D31）已批准：FR-13 改为目的域名有 IPv6 地址时只走 IPv6，IPv6 不可用或连接失败时连接失败、不改走 IPv4，没有 IPv6 地址时走 IPv4；依据是用户提供的配置样例中的双栈路由和出站设置。方案设计同步为 v1.3；同日按需求 U21、D32 决定 OD-5，方案设计为 v1.4；按需求 U22、D33 批准验证计划 v1.2 和详细设计 DO-14 的取值；按需求 U23、D34 批准验证计划 v1.3。
+| Order | Repository | Purpose | Status |
+|---|---|---|---|
+| 1 | [vps-hardening](https://github.com/alieismy/vps-hardening) | Baseline security hardening: key-only SSH, UFW, Fail2ban, automatic security updates | Release v0.2.1 |
+| 2 | [vps-tuning](https://github.com/alieismy/vps-tuning) | Network tuning, diagnostics and measurement | Pre-release v0.2.0-rc.4 |
+| 3 | vps-proxy-setup (this repository) | Installs and configures 3X-UI: the proxy inbound, the panel and the subscriptions (published through Cloudflare Tunnel) | In development, no release yet |
 
-v1.5（需求 U19、D29、D30）已批准：FR-13 的取值确定——IPv6 不可用或连接失败时改走 IPv4，其余流量保持系统默认，只有 IPv4 的 VPS 不启用、部署照常，是否启用由部署输入明确给出；Xray 核心的修复等 3X-UI 发布自带新核心的版本。方案设计同步为 v1.2。
+Full flow (vps-hardening requirements D27, D41, D42):
 
-v1.4（需求 U16～U18、D24～D28）已批准：补充研究复核、迁移前提、旧连接器的停止或隔离条件和订阅恢复的前提；迁移默认沿用同一个 Tunnel 的令牌，只在怀疑入侵或需要隔离无法管理的旧连接器时轮换；shortId 由部署脚本在 VPS 上用 `openssl rand -hex 8` 生成；新增 FR-13，双栈 VPS 上 `geosite:openai`、`geosite:anthropic` 的连接经 IPv6 出站，在 M2 实现，取值待 OQ-6。方案设计和验证计划同步为 v1.1。
+1. **Preparation**: update the system, install basic tools and reboot; done by the administrator;
+2. **vps-hardening**: harden and confirm;
+3. **vps-tuning**: tune (apply → reboot → verify);
+4. **vps-proxy-setup** (this repository): install and configure 3X-UI and cloudflared; then open the node port with `vps-hardening ports --add 443/tcp` and confirm. Subscriptions are published through Cloudflare Tunnel, so no subscription port is opened (requirements D21, FR-06);
+5. **Final checks**: vps-tuning's strict verification; after a reboot, check again with `vps-hardening verify`, the strict tuning verification and a proxy client connection.
 
-v1.3（需求 U11、D21）关闭 OQ-2，选定订阅与节点去同址的机制，已批准：3X-UI 的订阅只监听回环地址，经 Cloudflare Tunnel 以 HTTPS 发布；节点地址显式用 VPS 的公网 IP；2096/tcp 不开放；VPS 上不签发证书、不保存 Cloudflare API Token，只保存 Tunnel 的令牌；cloudflared 固定版本、不自动更新。用户接受 Cloudflare 看到订阅内容，VPS 的 IP 基本固定。评估见需求第 11.6 节。
+Apply and reboot for tuning only after the hardening is confirmed: a reboot before confirmation automatically undoes the hardening.
 
-v1.2（需求 U10、D18、D19、D20）在 v1.1 的基础上做两件事：按研究结论处理订阅与节点同址削弱伪装的问题（只定原则——节点优先用纯 IP、不挂证书、地址形式在方案设计中确定，订阅不与节点共用同一公网 IP，重开 OQ-2，机制留到方案设计），并按 CodeRabbit 对 v1.1 的三条意见修改（第 1 节范围、第 11.5 节和 FR-02 默认排除共享 CDN 的 target、FR-02 验收补用例），已批准。需求规格说明 v1.1 已批准：v1.0 的内容与 v0.4 草案相同（需求 U8、D16），v1.1 按 CodeRabbit 的意见修改了三处（需求 U9、D17）。v0.3 按需求 U6 决定了全部待决事项（v0.2 的其余内容已无异议）：
+## Agreed boundaries
 
-- 3X-UI 改用 v3.11.0（D10，第 11.3 节）；
-- 先调优、再安装 3X-UI，顺序不变（D11，第 11.4 节）；
-- 交付形态为首次部署脚本加只读检查：脚本只在全新安装的 3X-UI 上写入设置，之后的变更在面板中进行（D12，第 11.1 节）；
-- 分流规则以 Loyalsoldier/clash-rules 的白名单模式为基础，规则集用 MetaCubeX/meta-rules-dat 的 mrs 格式（D13，第 11.2 节）。
+The items below come from vps-hardening's approved requirements ([§7.2](https://github.com/alieismy/vps-hardening/blob/master/docs/requirements.md#72-与-vps-proxy-setup-的约定3x-ui-v3102), D14, D16, D32), on which this repository's requirements are based. The 3X-UI version changes under this repository's requirements D10, and the public ports and certificates are narrowed under D21; both stay within the agreement:
 
-v0.4 按需求 U7 增加：
+- 3X-UI is installed with a version argument, and `install.sh` is verified against a pinned digest before it runs. vps-hardening agreed on `v3.10.2`; this repository uses `v3.11.0` instead, because the Xray bundled with v3.10.2 has been withdrawn. The `install.sh` of v3.11.0 is identical to that of v3.10.2, so the digest is unchanged.
+- Installation sets `XUI_ENABLE_FAIL2BAN=false` and does not enable IP Limit; Fail2ban is managed by vps-hardening.
+- The panel port is the value recorded at hardening (2053 by default), passed through `XUI_PANEL_PORT`. After installation, `x-ui setting -listenIP 127.0.0.1` and a restart of x-ui make the panel listen on the loopback address only, reachable only through an SSH tunnel.
+- Public ports (for example 443/tcp and the subscription port 2096/tcp) are opened by the administrator with `vps-hardening ports --add` and confirmed from a new SSH session. This repository does not change UFW rules directly and does not use 3X-UI's firewall or BBR menus. Under D21, this repository opens only 443/tcp.
+- 80/tcp is not opened. Certificates are issued through DNS-01 with a Cloudflare API Token; the token is stored on the VPS with only the permissions needed to issue certificates, for example editing the DNS of a single zone. Under D21, this repository neither issues certificates on the VPS nor stores an API Token: subscriptions are published through Cloudflare Tunnel, and HTTPS is provided by Cloudflare's edge.
+- Since v26.9.8, Xray accepts only REALITY clients that offer the X25519MLKEM768 key exchange (v3.11.0 bundles v26.10.21), so clients must turn on ML-KEM first; for example, set `support-x25519mlkem768: true` in Mihomo.
 
-- 入站的备注以国旗开头，例如 `🇺🇸 LA-Reality`（D14）；
-- 伪装目标仍用第三方站点，在部署所用的 VPS 上按标准选择；未认证的连接只能到达伪装目标本身；不改为以自己的域名为目标（D15，第 11.5 节）。
+## Project status
 
-[方案设计](docs/solution-design.md) v1.0 已批准（需求 U12～U14、D22）：Bash 工具 `vps-proxy-setup`（`deploy`、`check`、`target-check`），经回环地址上的 3X-UI API 写入设置，检查只读；REALITY 的 target 指向 Xray 自己的本机转发入站，它的目的地址是占位的回环 IP，只有嗅探到 target 的 SNI 才改写并转发，不带 SNI 的连接不转发；服务端屏蔽经 REALITY 入站的回国流量；订阅经远程管理的 Cloudflare Tunnel 发布，cloudflared 用固定的程序文件和本仓库的服务单元，以动态用户运行。之后是验证计划、详细设计和实现。测试沿用 vps-hardening 的方式：CI 虚拟机，再加一台测试 VPS。v1.1 已批准（需求 U17、D25）：按需求 v1.4 修改迁移的令牌、shortId 的生成方式，FR-13 的机制列为 OD-5。v1.2 已批准（需求 U19、D29）：同步 FR-13 的取值，OD-5 的建议改为能在 IPv6 连接失败时改走 IPv4 的机制。v1.3 已批准（需求 U20、D31）：OD-5 的建议改为出站上用 `ForceIPv6v4`，IPv6 失败不改走 IPv4，路由仍为 `AsIs`。v1.4 已批准（需求 U21、D32）：OD-5 决定采用 `ForceIPv6v4`，不采用配置样例，不固定 IPv6 源地址。
+- **Documents**: requirements v1.6, solution design v1.4 and verification plan v1.3 are approved; detailed design v1.1 (v1.0 approved, plus a confirmed read rule from the M1 evidence). The contracts are implemented and verified milestone by milestone.
+- **Implementation**: milestones M1 to M5. M1 is implemented and passes in the CI virtual machines; M2 (first deployment) is not finished; there is no release yet.
+- **Acceptance**: the real Tunnel, a real target and the three clients are to be accepted on a test VPS, which needs separate authorization and has not been done.
 
-[验证计划](docs/verification-plan.md) v1.0 已批准（需求 U15、D23）：CI 虚拟机用 Debian 13 amd64，在客体内用两个网络命名空间分别放 Mihomo 客户端和 target 替身，FR-02 的负面用例在转发入站的外连侧取三处证据；真实的 Tunnel、真实 target 和三个客户端在测试 VPS 上验收（要另行授权）。之后是详细设计和实现。v1.1 已批准（需求 U17、D25）：M5 补充节点不可用时的订阅恢复场景，VT-86 核对 `--migrate` 之后新机连接器未启用，FR-13 的用例列为 VO-8。v1.2 已批准（需求 U22、D33）：补入 FR-13 的用例 VT-32～VT-34（双栈替身、外连隔离，IPv6 失败时确认没有改走 IPv4），关闭 VO-8。v1.3 已批准（需求 U23、D34）：按 CodeRabbit 的意见，VT-16 核对各次部署的 shortId 互不相同，VT-18 增加 shortId 生成失败的注入，FR-13 的 VT-32、VT-34 分别判定 TCP 和 UDP。
+The decisions and approvals are recorded in [requirements §2](docs/requirements.md#2-需求来源与已确认决定); each document's version and review status are in the table at its top.
 
-[详细设计](docs/detailed-design.md) v1.0 已批准（需求 U24、D35）：内容与 v0.2 草案的最后一版相同，批准的是契约，不是运行结果。v1.1 按 M1 的运行证据更新（第 10 节）：第 4.1 节补的一行读取前提（x-ui 已停止而两个侧文件都在时不读取数据库）已确认（需求 U25、D36），DO-1、DO-3、DO-8 关闭；验证计划第 3.5 节留到它的后续版本再同步 VO-1 的结果。v0.2 草案保留并修订 M1 的命令、预检、只读检查、`target-check` 和测试框架；补充 3X-UI API 与凭据生命周期、写入和备份恢复顺序、REALITY SNI 边界、Tunnel 动态用户与生效状态检查、测试注入接缝。实现和验证仍按 M1～M5 推进；规则文本、实际运行行为及待决事项没有被视为完成。shortId 生成来源与上游文字的差异（DO-12）已按需求 D28 关闭；DO-7、VO-5、VO-7 仍待用户决定。本次补充 IPv4 订阅、监听与双栈出站的分层契约；相关 Xray 核心修复评估列为 DO-13（已选定等 3X-UI 的修复版，需求 D30），OpenAI/Anthropic 的 IPv6 出站策略列为 DO-14（对应需求 FR-13），路由保持 `AsIs`。DO-14 的检查细节已在草案中冻结：部署输入 `ipv6_ai_egress`（`on`/`off`），检查项 `routing.ai-ipv6`、`ipv6.egress`，启用而没有可用的 IPv6 时预检拒绝，可用地址多于一个时警告，这些取值已获批准（需求 D33）；草案的其余部分随 v1.0 一并批准；M1 已实现，M2 起还没有实现。
+## Documentation
 
-## 许可证
+The documents are in Chinese.
+
+| Document | Contents |
+|---|---|
+| [Requirements specification](docs/requirements.md) | Functional requirements (FR), non-functional requirements, agreements with the other repositories, and the record of user statements (U) and confirmed decisions (D) |
+| [Solution design](docs/solution-design.md) | Components, boundaries, flows and key mechanisms |
+| [Detailed design](docs/detailed-design.md) | Command contract, check items, module layout, test framework, run evidence and known limitations |
+| [Verification plan](docs/verification-plan.md) | What is verified, where, and how a pass is judged (test items are numbered VT) |
+
+## Feedback
+
+Report bugs and suggestions in [GitHub Issues](https://github.com/alieismy/vps-proxy-setup/issues). Do not report security vulnerabilities in Issues; report them privately as described in [SECURITY.md](SECURITY.md).
+
+## License
 
 [MIT License](LICENSE)
