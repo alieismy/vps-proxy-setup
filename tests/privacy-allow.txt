@@ -19,6 +19,7 @@ domain openai.com
 domain chatgpt.com
 domain anthropic.com
 domain claude.ai
+domain shields.io
 
 # IPv4 blocks the node_ip validation rejects (detailed design 2.4).
 cidr 0.0.0.0/8 lib/vps-proxy-setup/inputs.sh docs/detailed-design.md
