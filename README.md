@@ -52,11 +52,11 @@ Exit codes: 0 all passed; 1 non-compliant items or refused; 2 usage or input err
 
 The three repositories are used in the order of the table below: harden first, then tune, then set up the proxy (vps-hardening requirements D27; this repository's requirements D11, assessed in [requirements §11.4](docs/requirements.md#114-执行顺序评估先调优还是先安装-3x-ui)).
 
-| Order | Repository | Purpose | Status |
-|---|---|---|---|
-| 1 | [vps-hardening](https://github.com/alieismy/vps-hardening) | Baseline security hardening: key-only SSH, UFW, Fail2ban, automatic security updates | Release v0.2.1 |
-| 2 | [vps-tuning](https://github.com/alieismy/vps-tuning) | Network tuning, diagnostics and measurement | Pre-release v0.2.0-rc.4 |
-| 3 | vps-proxy-setup (this repository) | Installs and configures 3X-UI: the proxy inbound, the panel and the subscriptions (published through Cloudflare Tunnel) | In development, no release yet |
+| Order | Repository | Purpose |
+|---|---|---|
+| 1 | [vps-hardening](https://github.com/alieismy/vps-hardening) | Baseline security hardening: key-only SSH, UFW, Fail2ban, automatic security updates |
+| 2 | [vps-tuning](https://github.com/alieismy/vps-tuning) | Network tuning, diagnostics and measurement |
+| 3 | vps-proxy-setup (this repository) | Installs and configures 3X-UI: the proxy inbound, the panel and the subscriptions (published through Cloudflare Tunnel) |
 
 Full flow (vps-hardening requirements D27, D41, D42):
 

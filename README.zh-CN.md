@@ -50,11 +50,11 @@
 
 三个仓库按下表的顺序使用：先加固，再调优，最后搭建代理（vps-hardening 需求 D27；本仓库需求 D11，评估见[需求第 11.4 节](docs/requirements.md#114-执行顺序评估先调优还是先安装-3x-ui)）。
 
-| 顺序 | 仓库 | 用途 | 状态 |
-|---|---|---|---|
-| 1 | [vps-hardening](https://github.com/alieismy/vps-hardening) | 基础安全加固：SSH 只用密钥、UFW、Fail2ban、自动安全更新 | 正式版 v0.2.1 |
-| 2 | [vps-tuning](https://github.com/alieismy/vps-tuning) | 网络调优、诊断与测量 | Pre-release v0.2.0-rc.4 |
-| 3 | vps-proxy-setup（本仓库） | 安装和配置 3X-UI：代理入站、面板、订阅（经 Cloudflare Tunnel 发布） | 开发中，尚无发行版 |
+| 顺序 | 仓库 | 用途 |
+|---|---|---|
+| 1 | [vps-hardening](https://github.com/alieismy/vps-hardening) | 基础安全加固：SSH 只用密钥、UFW、Fail2ban、自动安全更新 |
+| 2 | [vps-tuning](https://github.com/alieismy/vps-tuning) | 网络调优、诊断与测量 |
+| 3 | vps-proxy-setup（本仓库） | 安装和配置 3X-UI：代理入站、面板、订阅（经 Cloudflare Tunnel 发布） |
 
 完整流程（vps-hardening 需求 D27、D41、D42）：
 
